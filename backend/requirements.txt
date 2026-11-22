@@ -1,0 +1,39 @@
+# Backend Framework & ASGI Server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Database ORM & PostgreSQL Driver
+sqlalchemy>=2.0.36
+psycopg2-binary>=2.9.10
+
+# Validasi Data & Konfigurasi
+pydantic[email]>=2.10.0
+pydantic-settings>=2.6.0
+email-validator>=2.2.0
+python-dotenv>=1.0.1
+
+# Autentikasi JWT & Hashing Password
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.1,<5.0.0
+
+# Upload File & Pemrosesan Gambar
+python-multipart>=0.0.12
+Pillow>=11.0.0
+numpy>=1.26.0
+
+# NLP BISINDO (Koreksi Kata & Perangkai Kalimat Ringan)
+rapidfuzz>=3.9.0
+Sastrawi>=1.0.1
+
+# Audio Speech-to-Text (STT) & Multi-Voice Text-to-Speech (TTS)
+faster-whisper>=1.1.0
+imageio-ffmpeg>=0.5.1
+edge-tts>=6.1.12
+gTTS>=2.5.0
+
+# Computer Vision & Deep Learning BISINDO (Wajib saat AI_MOCK_MODE=false)
+torch>=2.3.0
+torchvision>=0.18.0
+mediapipe>=0.10.14
+opencv-python-headless>=4.10.0

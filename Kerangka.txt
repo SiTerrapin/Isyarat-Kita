@@ -1,0 +1,8 @@
+Nama Aplikasi : Isyarat Kita
+Framework : React Native + Expo + Tailwind CSS
+
+Menu:
+- Home
+- Transtlator
+- Sound Alert
+- Quick Cards

@@ -1,0 +1,33 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Python / Backend
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Model AI berukuran besar (simpan di cloud/storage terpisah)
+backend/models/*.pth
+backend/models/*.pt
+backend/models/*.onnx
+backend/models/*.h5
+backend/models/*.tflite
+backend/models/*.task
+
+# Node / Expo Mobile App
+node_modules/
+.expo/
+dist/
+web-build/
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json
