@@ -1,0 +1,72 @@
+{
+  "expo": {
+    "name": "Isyarat Kita",
+    "slug": "isyarat-kita",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "isyaratkita",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Isyarat Kita membutuhkan akses kamera untuk menerjemahkan bahasa isyarat BISINDO secara real-time.",
+        "NSMicrophoneUsageDescription": "Isyarat Kita membutuhkan akses mikrofon untuk mendeteksi suara darurat di sekitar Anda."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0D9488",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0D9488",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Izinkan Isyarat Kita mengakses kamera untuk menerjemahkan bahasa isyarat BISINDO."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Izinkan Isyarat Kita mengakses mikrofon untuk mendeteksi peringatan suara darurat."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

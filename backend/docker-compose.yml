@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: isyarat_kita_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password123}
+      POSTGRES_DB: ${POSTGRES_DB:-isyarat_kita}
+    ports:
+      # Default 15432 untuk menghindari bentrok port 5432/5433 (WinNAT / Hyper-V di Windows)
+      - "${DB_PORT:-15432}:5432"
+    volumes:
+      - pgdata_isyarat:/var/lib/postgresql/data
+      # Otomatis dijalankan PostgreSQL saat inisialisasi volume pertama kali
+      - ./migrations/001_init_schema.sql:/docker-entrypoint-initdb.d/01_init_schema.sql:ro
+      - ./seeds/001_seed_quick_cards.sql:/docker-entrypoint-initdb.d/02_seed_quick_cards.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-isyarat_kita}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata_isyarat:
