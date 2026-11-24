@@ -192,22 +192,22 @@ export default function QuickCardsScreen() {
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50" edges={["top"]}>
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950" edges={["top"]}>
       {/* Header + Filter Chips */}
-      <View className="border-b border-slate-200 bg-white pb-3 pt-4">
+      <View className="border-b border-slate-200 bg-white pb-3 pt-4 dark:border-slate-800 dark:bg-slate-900">
         <View className="px-5">
-          <Text className="text-2xl font-extrabold text-slate-900">
+          <Text className="text-2xl font-extrabold text-slate-900 dark:text-white">
             Kartu Komunikasi Cepat
           </Text>
-          <Text className="mt-0.5 text-sm text-slate-600">
+          <Text className="mt-0.5 text-sm text-slate-600 dark:text-slate-400">
             Ketuk kartu untuk menampilkan teks super besar & bacakan suara.
           </Text>
         </View>
 
         {isOfflineCards && (
-          <View className="mx-5 mt-3 flex-row items-center rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+          <View className="mx-5 mt-3 flex-row items-center rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-950">
             <WifiOff size={15} color="#B45309" />
-            <Text className="ml-2 flex-1 text-xs font-semibold text-amber-800">
+            <Text className="ml-2 flex-1 text-xs font-semibold text-amber-800 dark:text-amber-300">
               Mode Offline: Menampilkan 5 kartu darurat bawaan.
             </Text>
           </View>
@@ -227,12 +227,12 @@ export default function QuickCardsScreen() {
                 className={`rounded-full border px-4 py-2 ${
                   active
                     ? "border-teal-600 bg-teal-600"
-                    : "border-slate-200 bg-slate-50"
+                    : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800"
                 }`}
               >
                 <Text
                   className={`text-sm font-bold ${
-                    active ? "text-white" : "text-slate-700"
+                    active ? "text-white" : "text-slate-700 dark:text-slate-200"
                   }`}
                 >
                   {cat.label}
@@ -262,7 +262,7 @@ export default function QuickCardsScreen() {
               <Pressable
                 key={card.id}
                 onPress={() => setActiveCard(card)}
-                className="rounded-3xl border border-slate-200 bg-white p-5 active:bg-slate-50"
+                className="rounded-3xl border border-slate-200 bg-white p-5 active:bg-slate-50 dark:border-slate-800 dark:bg-slate-900"
               >
                 <View className="mb-2 flex-row items-center justify-between">
                   <View className="flex-row items-center gap-2">
@@ -272,16 +272,16 @@ export default function QuickCardsScreen() {
                       </Text>
                     </View>
                     {card.is_pinned && (
-                      <View className="flex-row items-center rounded-full bg-slate-100 px-2.5 py-1">
+                      <View className="flex-row items-center rounded-full bg-slate-100 px-2.5 py-1 dark:bg-slate-800">
                         <Pin size={12} color="#0D9488" />
-                        <Text className="ml-1 text-xs font-bold text-slate-600">
+                        <Text className="ml-1 text-xs font-bold text-slate-600 dark:text-slate-300">
                           Sematkan
                         </Text>
                       </View>
                     )}
                     {card.is_custom && (
-                      <View className="rounded-full bg-teal-50 px-2.5 py-1">
-                        <Text className="text-xs font-bold text-teal-700">
+                      <View className="rounded-full bg-teal-50 px-2.5 py-1 dark:bg-teal-950">
+                        <Text className="text-xs font-bold text-teal-700 dark:text-teal-300">
                           Kustom
                         </Text>
                       </View>
@@ -292,14 +292,14 @@ export default function QuickCardsScreen() {
                     <View className="flex-row items-center gap-1.5">
                       <Pressable
                         onPress={() => openEditForm(card)}
-                        className="h-9 w-9 items-center justify-center rounded-xl bg-slate-100 active:bg-slate-200"
+                        className="h-9 w-9 items-center justify-center rounded-xl bg-slate-100 active:bg-slate-200 dark:bg-slate-800"
                         accessibilityLabel="Edit kartu"
                       >
-                        <Edit3 size={16} color="#334155" />
+                        <Edit3 size={16} color="#64748B" />
                       </Pressable>
                       <Pressable
                         onPress={() => handleDeleteCard(card)}
-                        className="h-9 w-9 items-center justify-center rounded-xl bg-rose-50 active:bg-rose-100"
+                        className="h-9 w-9 items-center justify-center rounded-xl bg-rose-50 active:bg-rose-100 dark:bg-rose-950"
                         accessibilityLabel="Hapus kartu"
                       >
                         <Trash2 size={16} color="#E11D48" />
@@ -308,11 +308,11 @@ export default function QuickCardsScreen() {
                   )}
                 </View>
 
-                <Text className="text-xl font-extrabold text-slate-900">
+                <Text className="text-xl font-extrabold text-slate-900 dark:text-white">
                   {card.title}
                 </Text>
                 <Text
-                  className="mt-1.5 text-base leading-relaxed text-slate-600"
+                  className="mt-1.5 text-base leading-relaxed text-slate-600 dark:text-slate-300"
                   numberOfLines={3}
                 >
                   {card.message}

@@ -1,140 +1,59 @@
 import json
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
+
+import numpy as np
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-PRIORITY_VOCAB: set[str] = {
-    "SAYA",
-    "AKU",
-    "KAMU",
-    "ANDA",
-    "KITA",
-    "MEREKA",
-    "MAKAN",
-    "MINUM",
-    "TOLONG",
-    "TERIMA",
-    "KASIH",
-    "HALO",
-    "APA",
-    "KABAR",
-    "BANTU",
-    "RUMAH",
-    "SAKIT",
-    "MAU",
-    "INGIN",
-    "PERGI",
-    "BELI",
-    "BAYAR",
-    "HARGA",
-    "BERAPA",
-    "DIMANA",
-    "KAPAN",
-    "SIAPA",
-    "BAGAIMANA",
-    "MENGAPA",
-    "MAAF",
-    "NAMA",
-    "OBAT",
-    "DOKTER",
-    "APOTEK",
-    "KAMPUS",
-    "BELAJAR",
-    "KERJA",
-    "SKRIPSI",
-    "INFORMATIKA",
-    "NASI",
-    "AIR",
-    "KOPI",
-    "HAUS",
-    "LAPAR",
-    "KEPALA",
-    "BUTUH",
-    "DARURAT",
-    "DEKAT",
-    "SINI",
-    "BESOK",
-    "PAGI",
-    "SIANG",
-    "SORE",
-    "MALAM",
-    "DATANG",
-    "TELAT",
-    "KETEMU",
-    "SENANG",
-    "BISA",
-    "TIDAK",
-    "YA",
-    "NGOBROL",
-    "BAHASA",
-    "ISYARAT",
-    "PERMISI",
-    "TURUN",
-    "HALTE",
-    "STASIUN",
-    "QRIS",
-    "TUNAI",
-    "SEKARANG",
-    "TUNGGU",
-    "SEBENTAR",
-}
+PRIORITY_VOCAB: list[str] = [
+    "SAYA", "AKU", "KAMU", "ANDA", "KITA", "MEREKA",
+    "MAKAN", "MINUM", "TOLONG", "TERIMA", "KASIH", "HALO",
+    "APA", "KABAR", "BANTU", "RUMAH", "SAKIT", "MAU",
+    "INGIN", "PERGI", "BELI", "BAYAR", "HARGA", "BERAPA",
+    "DIMANA", "KAPAN", "SIAPA", "BAGAIMANA", "MENGAPA",
+    "MAAF", "NAMA", "OBAT", "DOKTER", "APOTEK", "KAMPUS",
+    "BELAJAR", "KERJA", "SKRIPSI", "INFORMATIKA", "NASI",
+    "AIR", "KOPI", "HAUS", "LAPAR", "KEPALA", "BUTUH",
+    "DARURAT", "DEKAT", "SINI", "BESOK", "PAGI", "SIANG",
+    "SORE", "MALAM", "SELAMAT", "DATANG", "TELAT", "KETEMU",
+    "SENANG", "BISA", "TIDAK", "YA", "NGOBROL", "BAHASA",
+    "ISYARAT", "PERMISI", "TURUN", "HALTE", "STASIUN", "QRIS",
+]
 
 ABBREVIATION_MAP: dict[str, str] = {
     "SY": "SAYA",
     "SYA": "SAYA",
-    "AQ": "AKU",
-    "KM": "KAMU",
     "MKN": "MAKAN",
-    "MNM": "MINUM",
+    "KMPUS": "KAMPUS",
     "TRMKSH": "TERIMA KASIH",
-    "MKSH": "TERIMA KASIH",
-    "MAKASIH": "TERIMA KASIH",
-    "TLG": "TOLONG",
-    "TLNG": "TOLONG",
     "GPP": "TIDAK APA-APA",
     "TDK": "TIDAK",
-    "GA": "TIDAK",
-    "GAK": "TIDAK",
-    "NGGAK": "TIDAK",
     "YG": "YANG",
     "BGT": "BANGET",
-    "DG": "DENGAN",
-    "DGN": "DENGAN",
-    "UTK": "UNTUK",
-    "RS": "RUMAH SAKIT",
+    "TLG": "TOLONG",
+    "MKSH": "TERIMA KASIH",
+    "MNM": "MINUM",
     "DMN": "DIMANA",
     "BRP": "BERAPA",
     "GMN": "BAGAIMANA",
-    "KPN": "KAPAN",
-    "SKT": "SAKIT",
-    "OBT": "OBAT",
-    "SDH": "SUDAH",
-    "UDAH": "SUDAH",
-    "BLM": "BELUM",
+    "RS": "RUMAH SAKIT",
 }
 
-BIGRAM_CONTEXT_BONUS: dict[tuple[str, str], float] = {
-    ("TERIMA", "KASIH"): 20.0,
-    ("RUMAH", "SAKIT"): 20.0,
-    ("APA", "KABAR"): 18.0,
-    ("NAMA", "SAYA"): 15.0,
-    ("TOLONG", "BANTU"): 16.0,
-    ("BANTU", "SAYA"): 14.0,
-    ("SAYA", "MAU"): 12.0,
-    ("MAU", "MAKAN"): 12.0,
-    ("MAU", "MINUM"): 12.0,
-    ("MAKAN", "NASI"): 14.0,
-    ("MINUM", "AIR"): 14.0,
-    ("MINUM", "KOPI"): 14.0,
-    ("BERAPA", "HARGA"): 18.0,
-    ("BUTUH", "OBAT"): 15.0,
-    ("DATANG", "TELAT"): 14.0,
-    ("BAHASA", "ISYARAT"): 18.0,
-    ("DEKAT", "SINI"): 14.0,
+BIGRAM_CONTEXT_BONUS: dict[str, dict[str, float]] = {
+    "TERIMA": {"KASIH": 35.0},
+    "SELAMAT": {"PAGI": 30.0, "SIANG": 30.0, "SORE": 30.0, "MALAM": 30.0},
+    "APA": {"KABAR": 35.0},
+    "RUMAH": {"SAKIT": 35.0},
+    "TOLONG": {"BANTU": 25.0},
+    "BANTU": {"SAYA": 20.0},
+    "NAMA": {"SAYA": 25.0},
+    "BERAPA": {"HARGA": 30.0},
+    "BAHASA": {"ISYARAT": 30.0},
 }
 
 WORD_DISPLAY_MAP: dict[str, str] = {
@@ -151,53 +70,57 @@ WORD_DISPLAY_MAP: dict[str, str] = {
 }
 
 QUESTION_WORDS: set[str] = {
-    "apa",
-    "apakah",
-    "siapa",
-    "di mana",
-    "ke mana",
-    "dari mana",
-    "kapan",
-    "berapa",
-    "bagaimana",
-    "mengapa",
+    "apa", "apakah", "siapa", "di mana", "ke mana",
+    "dari mana", "kapan", "berapa", "bagaimana", "mengapa",
 }
 
 
 class BISINDONLPProcessor:
     """
-    Pengolah NLP Bahasa Indonesia ringan untuk BISINDO:
-    - Deduplikasi stream huruf
-    - Koreksi kata (Sastrawi + rapidfuzz + ABBREVIATION_MAP + BIGRAM_CONTEXT_BONUS)
-    - Perangkai gloss ke kalimat natural (dataset JSONL match -> rule-based -> opsional LLM hook)
+    Pengolah NLP BISINDO identik 100% dengan notebook testing:
+    - vocab_counter (Sastrawi + kosakata prioritas + dataset JSONL)
+    - deduplicate_stream(raw_letters, max_repeat=2)
+    - correct_word(raw_word, prev_word) dengan formula exact rapidfuzz WRatio + log10 freq - diff*12 + bigram bonus
+    - refine_gloss_to_natural (dataset JSONL match >= 88% -> opsional LLM hook -> rule-based)
     """
 
-    def __init__(self, dataset_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        vocab_counter: Optional[Counter] = None,
+        abbr_map: Optional[dict[str, str]] = None,
+        bigram_bonus: Optional[dict[str, dict[str, float]]] = None,
+        dataset_path: Optional[Path] = None,
+    ) -> None:
         self.dataset_path: Path = dataset_path or settings.resolved_gloss_dataset_path
-        self.vocab_set: set[str] = set(PRIORITY_VOCAB)
-        self.vocab_list: list[str] = []
+        self.abbr_map: dict[str, str] = dict(abbr_map or ABBREVIATION_MAP)
+        self.bigram_bonus: dict[str, dict[str, float]] = dict(
+            bigram_bonus or BIGRAM_CONTEXT_BONUS
+        )
         self.dataset_pairs: list[tuple[str, str]] = []
-        self._load_vocabulary()
+        self.vocab_counter: Counter = (
+            vocab_counter if vocab_counter is not None else self._build_vocab_counter()
+        )
         self._load_dataset()
+        self.vocab_list: list[str] = list(self.vocab_counter.keys())
 
-    def _load_vocabulary(self) -> None:
+    def _build_vocab_counter(self) -> Counter:
+        counter: Counter = Counter()
         try:
             from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 
             factory = StemmerFactory()
-            words = factory.get_words_from_file()
-            for w in words:
+            for w in factory.get_words_from_file():
                 cleaned = w.strip().upper()
                 if cleaned.isalpha() and len(cleaned) >= 2:
-                    self.vocab_set.add(cleaned)
-            logger.info("Kosakata Sastrawi dimuat: %d kata.", len(self.vocab_set))
+                    counter[cleaned] += 1
+            logger.info("Kosakata Sastrawi dimuat: %d kata.", len(counter))
         except Exception as exc:
-            logger.warning(
-                "Sastrawi tidak tersedia (%s). Menggunakan kosakata prioritas (%d kata).",
-                exc,
-                len(self.vocab_set),
-            )
-        self.vocab_list = sorted(self.vocab_set)
+            logger.warning("Sastrawi tidak tersedia (%s), gunakan kosakata prioritas.", exc)
+
+        # Beri bobot frekuensi lebih tinggi untuk kata sehari-hari & layanan publik
+        for w in PRIORITY_VOCAB:
+            counter[w] += 100
+        return counter
 
     def _load_dataset(self) -> None:
         if not self.dataset_path.exists():
@@ -216,77 +139,77 @@ class BISINDONLPProcessor:
                         pairs.append((gloss, natural))
                         for token in gloss.split():
                             if token.isalpha():
-                                self.vocab_set.add(token)
+                                self.vocab_counter[token] += 50
             self.dataset_pairs = pairs
-            self.vocab_list = sorted(self.vocab_set)
             logger.info(
-                "Dataset referensi gloss dimuat (%d pasangan) dari %s.",
+                "Dataset gloss dimuat (%d pasangan) dari %s.",
                 len(self.dataset_pairs),
                 self.dataset_path,
             )
         except Exception as exc:
             logger.warning("Gagal memuat dataset JSONL (%s): %s", self.dataset_path, exc)
 
-    @staticmethod
-    def deduplicate_stream(raw_letters: list[str], max_repeat: int = 2) -> str:
-        """Gabungkan stream huruf sambil membatasi pengulangan beruntun maksimal max_repeat."""
-        result: list[str] = []
-        repeat_count = 0
-        last_char = ""
-
-        for ch in raw_letters:
-            clean = ch.strip().upper()
-            if not clean:
-                continue
-            for c in clean:
-                if c == last_char:
-                    repeat_count += 1
-                    if repeat_count <= max_repeat:
-                        result.append(c)
-                else:
-                    last_char = c
-                    repeat_count = 1
-                    result.append(c)
-        return "".join(result)
+    def deduplicate_stream(self, raw_letters: list[str], max_repeat: int = 2) -> str:
+        """Identik 100% dengan deduplicate_stream pada notebook testing."""
+        if not raw_letters:
+            return ""
+        flat = [ch.strip().upper() for ch in raw_letters if ch and ch.strip()]
+        if not flat:
+            return ""
+        cleaned = [flat[0]]
+        rep = 1
+        for ch in flat[1:]:
+            if ch == cleaned[-1]:
+                rep += 1
+                if rep <= max_repeat:
+                    cleaned.append(ch)
+            else:
+                rep = 1
+                cleaned.append(ch)
+        return "".join(cleaned).upper()
 
     def correct_word(self, raw_word: str, prev_word: Optional[str] = None) -> str:
+        """Identik 100% dengan correct_word pada notebook testing."""
         word = raw_word.strip().upper()
         if not word:
             return ""
-
-        if word in ABBREVIATION_MAP:
-            return ABBREVIATION_MAP[word]
-
-        if word in self.vocab_set:
-            return word
+        if word in self.abbr_map:
+            return self.abbr_map[word]
 
         prev_upper = prev_word.strip().upper() if prev_word else None
 
         try:
             from rapidfuzz import fuzz, process
 
-            candidates = process.extract(
+            cands = process.extract(
                 word,
                 self.vocab_list,
                 scorer=fuzz.WRatio,
+                limit=10,
                 score_cutoff=65,
-                limit=8,
             )
-            if not candidates:
+            if not cands:
                 return word
 
-            best_word = word
-            best_score = -1.0
-            for cand, base_score, _ in candidates:
-                score = float(base_score)
-                if cand in PRIORITY_VOCAB:
-                    score += 5.0
-                if prev_upper:
-                    score += BIGRAM_CONTEXT_BONUS.get((prev_upper, cand), 0.0)
-                if score > best_score:
-                    best_score = score
-                    best_word = cand
-            return best_word
+            best, max_sc = word, -1.0
+            for cw, sim, _ in cands:
+                diff = abs(len(cw) - len(word))
+                if diff > 2:
+                    continue
+                score = (
+                    float(sim)
+                    + min(15.0, float(np.log10(self.vocab_counter[cw] + 1) * 2.5))
+                    - (diff * 12.0)
+                )
+                if (
+                    prev_upper
+                    and prev_upper in self.bigram_bonus
+                    and cw in self.bigram_bonus[prev_upper]
+                ):
+                    score += self.bigram_bonus[prev_upper][cw]
+                if score > max_sc:
+                    max_sc, best = score, cw
+            return best
         except Exception:
             return word
 
@@ -322,7 +245,6 @@ class BISINDONLPProcessor:
 
     @staticmethod
     def _refine_with_optional_llm(cleaned_gloss: list[str]) -> Optional[str]:
-        """Hook opsional jika suatu saat ingin dihubungkan ke LLM API / Gemini."""
         if not settings.LLM_API_URL and not settings.GEMINI_API_KEY:
             return None
         return None
@@ -333,7 +255,6 @@ class BISINDONLPProcessor:
             part = token.strip().upper()
             if not part:
                 continue
-            # Bersihkan pengulangan kata beruntun yang identik
             if not cleaned or cleaned[-1] != part:
                 cleaned.append(part)
 
@@ -342,39 +263,20 @@ class BISINDONLPProcessor:
 
         query_gloss = " ".join(cleaned)
 
-        # 1. Cek kecocokan tinggi pada dataset referensi JSONL (>= 88%)
         matched = self._match_dataset(query_gloss)
         if matched:
-            return {
-                "sentence": matched,
-                "source": "dataset",
-                "raw_gloss": cleaned,
-            }
+            return {"sentence": matched, "source": "dataset", "raw_gloss": cleaned}
 
-        # 2. Hook opsional LLM (tidak aktif secara default agar 100% ringan & offline)
         llm_result = self._refine_with_optional_llm(cleaned)
         if llm_result:
-            return {
-                "sentence": llm_result,
-                "source": "llm",
-                "raw_gloss": cleaned,
-            }
+            return {"sentence": llm_result, "source": "llm", "raw_gloss": cleaned}
 
-        # 3. Lightweight Indonesian grammar & capitalization refiner
-        words: list[str] = []
-        for token in cleaned:
-            mapped = WORD_DISPLAY_MAP.get(token, token.lower())
-            words.append(mapped)
-
+        words = [WORD_DISPLAY_MAP.get(token, token.lower()) for token in cleaned]
         joined = " ".join(words).strip().rstrip(".!?")
         is_question = any(w in QUESTION_WORDS for w in words)
         sentence = joined[0].upper() + joined[1:] + ("?" if is_question else ".")
 
-        return {
-            "sentence": sentence,
-            "source": "rule",
-            "raw_gloss": cleaned,
-        }
+        return {"sentence": sentence, "source": "rule", "raw_gloss": cleaned}
 
 
 nlp_processor = BISINDONLPProcessor()

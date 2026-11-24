@@ -5,7 +5,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
-from PIL import Image, UnidentifiedImageError
+import numpy as np
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core.config import settings
 
@@ -16,7 +17,7 @@ HAND_LANDMARKER_URL = (
     "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
 )
 
-ANGLE_TRIPLETS: list[tuple[int, int, int]] = [
+FINGER_ANGLE_TRIPLETS: list[tuple[int, int, int]] = [
     (0, 1, 2),
     (1, 2, 3),
     (2, 3, 4),
@@ -28,27 +29,36 @@ ANGLE_TRIPLETS: list[tuple[int, int, int]] = [
     (13, 14, 15),
     (0, 17, 18),
 ]
-
 FINGERTIP_INDICES: list[int] = [4, 8, 12, 16, 20]
+USE_ROI_CROP: bool = True
 
 MOCK_ALPHABET: list[str] = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
-def _build_gated_multimodal_model(lm_dim: int, n_classes: int) -> Any:
-    """
-    Bangun arsitektur GatedMultimodalSignModel persis sesuai state_dict
-    checkpoint bisindo_convnext_tiny_gated_FINAL.pth.
-    """
+def _create_gated_multimodal_model(
+    n_classes: int,
+    lm_dim: int = 156,
+    backbone_name: str = "convnext_tiny",
+    pretrained: bool = False,
+) -> Any:
+    """Arsitektur GatedMultimodalSignModel — identik 100% dengan notebook testing."""
     import torch
     import torch.nn as nn
-    from torchvision.models import convnext_tiny
+    import torchvision.models as models
 
     class GatedMultimodalSignModel(nn.Module):
-        def __init__(self, _lm_dim: int, _n_classes: int) -> None:
+        def __init__(
+            self,
+            _n_classes: int,
+            _lm_dim: int = 156,
+            _backbone_name: str = "convnext_tiny",
+            _pretrained: bool = False,
+        ) -> None:
             super().__init__()
-            self.backbone = convnext_tiny(weights=None).features
-            self.vis_pool = nn.AdaptiveAvgPool2d((1, 1))
+            backbone = models.convnext_tiny(weights=None)
             vis_out_dim = 768
+            self.backbone = backbone.features
+            self.vis_pool = nn.AdaptiveAvgPool2d((1, 1))
 
             self.vis_proj = nn.Sequential(
                 nn.Flatten(),
@@ -85,130 +95,118 @@ def _build_gated_multimodal_model(lm_dim: int, n_classes: int) -> Any:
             )
 
         def forward(self, img: Any, lm: Any) -> Any:
-            v_feat = self.vis_proj(self.vis_pool(self.backbone(img)))
+            v_raw = self.vis_pool(self.backbone(img))
+            v_feat = self.vis_proj(v_raw)
             l_feat = self.lm_encoder(lm)
-            gate = self.vis_gate(torch.cat([v_feat, l_feat], dim=1))
+            concat_raw = torch.cat([v_feat, l_feat], dim=1)
+            gate = self.vis_gate(concat_raw)
             v_attended = v_feat * gate
-            return self.classifier(torch.cat([v_attended, l_feat], dim=1))
+            fused = torch.cat([v_attended, l_feat], dim=1)
+            return self.classifier(fused)
 
-    return GatedMultimodalSignModel(lm_dim, n_classes)
+    return GatedMultimodalSignModel(
+        _n_classes=n_classes,
+        _lm_dim=lm_dim,
+        _backbone_name=backbone_name,
+        _pretrained=pretrained,
+    )
 
 
-def _compute_hand_geometry(pts: Any) -> Any:
-    """
-    Hitung 15 fitur geometri per tangan:
-    - 10 sudut kosinus jari dari ANGLE_TRIPLETS
-    - 5 jarak ujung jari [4,8,12,16,20] ke wrist [0] dibagi palm_scale
-    """
-    import numpy as np
-
-    angles: list[float] = []
-    for a, b, c in ANGLE_TRIPLETS:
-        v1 = pts[a] - pts[b]
-        v2 = pts[c] - pts[b]
-        denom = float(np.linalg.norm(v1) * np.linalg.norm(v2)) + 1e-6
-        cos_val = float(np.dot(v1, v2) / denom)
-        angles.append(float(np.clip(cos_val, -1.0, 1.0)))
-
-    palm_scale = float(np.linalg.norm(pts[9] - pts[0])) + 1e-6
+def compute_hand_geometry(pts_21x3: np.ndarray) -> np.ndarray:
+    """Identik 100% dengan fungsi compute_hand_geometry pada notebook testing."""
+    if not np.any(pts_21x3):
+        return np.zeros(15, dtype=np.float32)
+    angles = []
+    for a, b, c in FINGER_ANGLE_TRIPLETS:
+        v1 = pts_21x3[a] - pts_21x3[b]
+        v2 = pts_21x3[c] - pts_21x3[b]
+        norm1 = np.linalg.norm(v1) + 1e-6
+        norm2 = np.linalg.norm(v2) + 1e-6
+        angles.append(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0))
+    palm_scale = np.linalg.norm(pts_21x3[9] - pts_21x3[0]) + 1e-6
     tip_dists = [
-        float(np.linalg.norm(pts[tip] - pts[0])) / palm_scale
+        np.linalg.norm(pts_21x3[tip] - pts_21x3[0]) / palm_scale
         for tip in FINGERTIP_INDICES
     ]
-
     return np.array(angles + tip_dists, dtype=np.float32)
 
 
-def _extract_156_landmarks(result: Any) -> Any:
-    """
-    Ekstrak vektor 156 dimensi dari hasil MediaPipe HandLandmarker:
-    [slot_left (63), slot_right (63), geom_left (15), geom_right (15)]
-    """
-    import numpy as np
+def crop_hand_roi(
+    pil_img: Image.Image,
+    raw_hands_list: list[np.ndarray],
+    margin: float = 0.25,
+) -> Image.Image:
+    """Square ROI crop identik 100% dengan notebook testing."""
+    if not raw_hands_list:
+        return pil_img
+    w, h = pil_img.size
+    all_pts = np.concatenate(raw_hands_list, axis=0)
+    xs, ys = all_pts[:, 0] * w, all_pts[:, 1] * h
+    x_min, x_max = max(0.0, float(xs.min())), min(float(w), float(xs.max()))
+    y_min, y_max = max(0.0, float(ys.min())), min(float(h), float(ys.max()))
+    side = max(x_max - x_min, y_max - y_min, 32.0) * (1.0 + 2 * margin)
+    cx, cy = (x_min + x_max) / 2.0, (y_min + y_max) / 2.0
+    left = int(max(0.0, cx - side / 2.0))
+    top = int(max(0.0, cy - side / 2.0))
+    right = int(min(float(w), cx + side / 2.0))
+    bottom = int(min(float(h), cy + side / 2.0))
+    if right - left < 20 or bottom - top < 20:
+        return pil_img
+    return pil_img.crop((left, top, right, bottom))
+
+
+def extract_hand_features(
+    img_rgb: np.ndarray,
+    hands_detector: Any,
+    mp_module: Any,
+) -> tuple[Optional[np.ndarray], Optional[list[np.ndarray]]]:
+    """Ekstraktor 156 fitur MediaPipe — identik 100% dengan notebook testing."""
+    mp_image = mp_module.Image(
+        image_format=mp_module.ImageFormat.SRGB,
+        data=img_rgb,
+    )
+    results = hands_detector.detect(mp_image)
+    if not results.hand_landmarks:
+        return None, None
 
     slot_left = np.zeros((21, 3), dtype=np.float32)
     slot_right = np.zeros((21, 3), dtype=np.float32)
     geom_left = np.zeros(15, dtype=np.float32)
     geom_right = np.zeros(15, dtype=np.float32)
+    raw_hands: list[np.ndarray] = []
 
-    left_filled = False
-    right_filled = False
+    for idx, hand_lms in enumerate(results.hand_landmarks):
+        arr = np.array([[l.x, l.y, l.z] for l in hand_lms], dtype=np.float32)
+        raw_hands.append(arr.copy())
+        geom = compute_hand_geometry(arr)
+        rel = arr - arr[0].copy()
+        rel /= np.linalg.norm(rel[:, :2], axis=1).max() + 1e-6
+        handedness = (
+            results.handedness[idx][0].category_name.lower()
+            if idx < len(results.handedness)
+            else "right"
+        )
+        if handedness == "left" and not np.any(slot_left):
+            slot_left, geom_left = rel, geom
+        elif handedness == "right" and not np.any(slot_right):
+            slot_right, geom_right = rel, geom
+        else:
+            if not np.any(slot_left):
+                slot_left, geom_left = rel, geom
+            else:
+                slot_right, geom_right = rel, geom
 
-    hand_landmarks_list = result.hand_landmarks or []
-    handedness_list = result.handedness or []
-
-    for idx, hand_lms in enumerate(hand_landmarks_list[:2]):
-        arr = np.array([[lm.x, lm.y, lm.z] for lm in hand_lms], dtype=np.float32)
-        rel = arr - arr[0]
-        scale = float(np.linalg.norm(rel[:, :2], axis=1).max()) + 1e-6
-        norm_arr = rel / scale
-        geom = _compute_hand_geometry(arr)
-
-        hand_label = "right"
-        if idx < len(handedness_list) and handedness_list[idx]:
-            hand_label = (handedness_list[idx][0].category_name or "right").lower()
-
-        if hand_label == "left" and not left_filled:
-            slot_left = norm_arr
-            geom_left = geom
-            left_filled = True
-        elif not right_filled:
-            slot_right = norm_arr
-            geom_right = geom
-            right_filled = True
-        elif not left_filled:
-            slot_left = norm_arr
-            geom_left = geom
-            left_filled = True
-
-    return np.concatenate(
-        [
-            slot_left.reshape(-1),
-            slot_right.reshape(-1),
-            geom_left,
-            geom_right,
-        ]
+    feat_vec = np.concatenate(
+        [slot_left.reshape(-1), slot_right.reshape(-1), geom_left, geom_right]
     ).astype(np.float32)
-
-
-def _crop_hand_roi(image_rgb: Any, hand_landmarks_list: list[Any], margin: float = 0.25) -> Image.Image:
-    """Crop area ROI tangan dengan margin 25% dari frame RGB."""
-    height, width = image_rgb.shape[:2]
-    xs: list[float] = []
-    ys: list[float] = []
-
-    for hand_lms in hand_landmarks_list:
-        for lm in hand_lms:
-            xs.append(lm.x * width)
-            ys.append(lm.y * height)
-
-    if not xs or not ys:
-        return Image.fromarray(image_rgb)
-
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-    box_w = max(x_max - x_min, 1.0)
-    box_h = max(y_max - y_min, 1.0)
-
-    pad_x = box_w * margin
-    pad_y = box_h * margin
-
-    x1 = max(0, int(x_min - pad_x))
-    y1 = max(0, int(y_min - pad_y))
-    x2 = min(width, int(x_max + pad_x))
-    y2 = min(height, int(y_max + pad_y))
-
-    if x2 <= x1 or y2 <= y1:
-        return Image.fromarray(image_rgb)
-
-    return Image.fromarray(image_rgb[y1:y2, x1:x2])
+    return feat_vec, raw_hands
 
 
 class BisindoVisionService:
     """
-    Pipeline deteksi BISINDO:
-    MediaPipe HandLandmarker (156-dim landmarks + ROI crop) + GatedMultimodalSignModel (ConvNeXt-Tiny).
-    Otomatis fallback ke mode 'mock' jika AI_MOCK_MODE=true atau bobot .pth belum tersedia.
+    Pipeline deteksi BISINDO identik 100% dengan notebook testing:
+    ImageOps.exif_transpose -> MediaPipe HandLandmarker (156 dim) -> Square ROI Crop ->
+    Resize(224,224) + ImageNet Normalize -> GatedMultimodalSignModel.
     """
 
     def __init__(
@@ -218,14 +216,17 @@ class BisindoVisionService:
         mock_mode: Optional[bool] = None,
     ) -> None:
         self.model_path: Path = model_path or settings.resolved_model_path
-        self.landmarker_path: Path = landmarker_path or settings.resolved_hand_landmarker_path
+        self.landmarker_path: Path = (
+            landmarker_path or settings.resolved_hand_landmarker_path
+        )
         self.mock_mode_config: bool = (
             settings.AI_MOCK_MODE if mock_mode is None else mock_mode
         )
         self.device: Any = None
         self.model: Any = None
         self.landmarker: Any = None
-        self.transform: Any = None
+        self.val_tf: Any = None
+        self._mp: Any = None
         self.classes: list[str] = list(MOCK_ALPHABET)
         self.lm_dim: int = 156
         self.model_loaded: bool = False
@@ -233,11 +234,17 @@ class BisindoVisionService:
         self.load_model()
 
     def _ensure_hand_landmarker_file(self) -> bool:
-        if self.landmarker_path.exists() and self.landmarker_path.stat().st_size > 100_000:
+        if (
+            self.landmarker_path.exists()
+            and self.landmarker_path.stat().st_size > 100_000
+        ):
             return True
         try:
             self.landmarker_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info("Mengunduh MediaPipe hand_landmarker.task ke %s...", self.landmarker_path)
+            logger.info(
+                "Mengunduh MediaPipe hand_landmarker.task ke %s...",
+                self.landmarker_path,
+            )
             urllib.request.urlretrieve(HAND_LANDMARKER_URL, str(self.landmarker_path))
             return self.landmarker_path.exists()
         except Exception as exc:
@@ -274,7 +281,7 @@ class BisindoVisionService:
             from mediapipe.tasks import python as mp_python
             from mediapipe.tasks.python import vision as mp_vision
             import torch
-            from torchvision import transforms
+            import torchvision.transforms as T
 
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             checkpoint = torch.load(
@@ -285,21 +292,23 @@ class BisindoVisionService:
 
             self.classes = list(checkpoint["classes"])
             self.lm_dim = int(checkpoint["lm_dim"])
+            backbone_name = str(checkpoint.get("backbone", "convnext_tiny"))
 
-            model = _build_gated_multimodal_model(
-                lm_dim=self.lm_dim,
+            model = _create_gated_multimodal_model(
                 n_classes=len(self.classes),
-            )
+                lm_dim=self.lm_dim,
+                backbone_name=backbone_name,
+                pretrained=False,
+            ).to(self.device)
             model.load_state_dict(checkpoint["model_state"])
-            model.to(self.device)
             model.eval()
             self.model = model
 
-            self.transform = transforms.Compose(
+            self.val_tf = T.Compose(
                 [
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(
+                    T.Resize((224, 224)),
+                    T.ToTensor(),
+                    T.Normalize(
                         mean=[0.485, 0.456, 0.406],
                         std=[0.229, 0.224, 0.225],
                     ),
@@ -321,9 +330,10 @@ class BisindoVisionService:
             self.model_loaded = True
             self.active_mode = "model"
             logger.info(
-                "Model BISINDO berhasil dimuat (%d kelas, lm_dim=%d, device=%s).",
+                "Model BISINDO berhasil dimuat (%d kelas, lm_dim=%d, backbone=%s, device=%s).",
                 len(self.classes),
                 self.lm_dim,
+                backbone_name,
                 self.device,
             )
         except Exception as exc:
@@ -342,8 +352,8 @@ class BisindoVisionService:
             raise ValueError("Data gambar kosong.")
         try:
             img = Image.open(io.BytesIO(image_bytes))
-            img.verify()
-            return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            return img
         except (UnidentifiedImageError, OSError) as exc:
             raise ValueError("Payload bukan format gambar yang valid.") from exc
 
@@ -371,20 +381,21 @@ class BisindoVisionService:
         }
 
     def predict_sign(self, image_bytes: bytes) -> dict[str, Any]:
-        pil_image = self.validate_and_decode_image(image_bytes)
+        pil_img = self.validate_and_decode_image(image_bytes)
 
-        if self.active_mode == "model" and self.model_loaded and self.landmarker is not None:
-            import numpy as np
+        if (
+            self.active_mode == "model"
+            and self.model_loaded
+            and self.landmarker is not None
+        ):
             import torch
 
-            image_rgb = np.ascontiguousarray(np.array(pil_image, dtype=np.uint8))
-            mp_image = self._mp.Image(
-                image_format=self._mp.ImageFormat.SRGB,
-                data=image_rgb,
+            img_rgb = np.ascontiguousarray(np.array(pil_img, dtype=np.uint8))
+            feat_vec, raw_hands = extract_hand_features(
+                img_rgb, self.landmarker, self._mp
             )
-            result = self.landmarker.detect(mp_image)
 
-            if not result.hand_landmarks:
+            if feat_vec is None or not raw_hands:
                 return {
                     "detected": False,
                     "hand_found": False,
@@ -394,15 +405,17 @@ class BisindoVisionService:
                     "mode": "model",
                 }
 
-            lm_vec = _extract_156_landmarks(result)
-            roi_pil = _crop_hand_roi(image_rgb, result.hand_landmarks, margin=0.25)
-
-            img_tensor = self.transform(roi_pil).unsqueeze(0).to(self.device)
-            lm_tensor = torch.from_numpy(lm_vec).unsqueeze(0).to(self.device)
+            pil_roi = (
+                crop_hand_roi(pil_img, raw_hands, margin=0.25)
+                if USE_ROI_CROP
+                else pil_img
+            )
+            img_tensor = self.val_tf(pil_roi).unsqueeze(0).to(self.device)
+            lm_tensor = torch.from_numpy(feat_vec).unsqueeze(0).to(self.device)
 
             with torch.no_grad():
                 logits = self.model(img_tensor, lm_tensor)
-                probs = torch.softmax(logits, dim=-1)[0]
+                probs = torch.softmax(logits, dim=1)[0]
                 k = min(3, len(self.classes))
                 top_scores, top_indices = torch.topk(probs, k=k)
 

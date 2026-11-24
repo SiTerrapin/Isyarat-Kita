@@ -593,29 +593,33 @@ export default function TranslatorScreen() {
   ).join("");
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50" edges={["top"]}>
+    <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950" edges={["top"]}>
       {/* Segmented Tab Switcher */}
-      <View className="border-b border-slate-200 bg-white px-4 pb-3 pt-3">
+      <View className="border-b border-slate-200 bg-white px-4 pb-3 pt-3 dark:border-slate-800 dark:bg-slate-900">
         <View className="mb-2.5 flex-row items-center justify-between">
-          <Text className="text-xl font-extrabold text-slate-900">
+          <Text className="text-xl font-extrabold text-slate-900 dark:text-white">
             Translator Dua Arah
           </Text>
           <Pressable
             onPress={() => setShowDebug((prev) => !prev)}
             className={`rounded-full px-3 py-1 ${
-              showDebug ? "bg-amber-100" : "bg-slate-100"
+              showDebug
+                ? "bg-amber-100 dark:bg-amber-950"
+                : "bg-slate-100 dark:bg-slate-800"
             }`}
           >
             <Text
               className={`text-xs font-bold ${
-                showDebug ? "text-amber-800" : "text-slate-600"
+                showDebug
+                  ? "text-amber-800 dark:text-amber-300"
+                  : "text-slate-600 dark:text-slate-300"
               }`}
             >
               Debug: {showDebug ? "ON" : "OFF"}
             </Text>
           </Pressable>
         </View>
-        <View className="flex-row rounded-2xl bg-slate-100 p-1">
+        <View className="flex-row rounded-2xl bg-slate-100 p-1 dark:bg-slate-800">
           <Pressable
             onPress={() => setActiveTab("sign")}
             className={`flex-1 items-center rounded-xl py-2.5 ${
@@ -624,7 +628,9 @@ export default function TranslatorScreen() {
           >
             <Text
               className={`text-sm font-bold ${
-                activeTab === "sign" ? "text-white" : "text-slate-600"
+                activeTab === "sign"
+                  ? "text-white"
+                  : "text-slate-600 dark:text-slate-300"
               }`}
             >
               Isyarat → Suara & Teks
@@ -638,7 +644,9 @@ export default function TranslatorScreen() {
           >
             <Text
               className={`text-sm font-bold ${
-                activeTab === "chat" ? "text-white" : "text-slate-600"
+                activeTab === "chat"
+                  ? "text-white"
+                  : "text-slate-600 dark:text-slate-300"
               }`}
             >
               Suara ↔ Teks (Chat)
@@ -798,20 +806,20 @@ export default function TranslatorScreen() {
           )}
 
           {/* Panel Hasil Ejaan, Kumpulan Kata & Kalimat Natural */}
-          <View className="mt-3 rounded-3xl border border-slate-200 bg-white p-4">
+          <View className="mt-3 rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
             {/* Ejaan Huruf */}
             <View className="mb-2.5 flex-row items-center justify-between">
-              <Text className="text-xs font-bold uppercase tracking-wider text-slate-500">
+              <Text className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Ejaan Huruf
               </Text>
-              <Text className="text-base font-extrabold tracking-widest text-teal-700">
+              <Text className="text-base font-extrabold tracking-widest text-teal-700 dark:text-teal-400">
                 {currentLetters.length > 0 ? currentLetters.join("-") : "—"}
               </Text>
             </View>
 
             {/* Kumpulan Kata (Gloss) */}
             <View className="mb-3">
-              <Text className="mb-1.5 text-xs font-bold uppercase tracking-wider text-slate-500">
+              <Text className="mb-1.5 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Kumpulan Kata
               </Text>
               {glossWords.length === 0 ? (
@@ -823,9 +831,9 @@ export default function TranslatorScreen() {
                   {glossWords.map((w, idx) => (
                     <View
                       key={`${w}-${idx}`}
-                      className="rounded-xl bg-teal-50 px-3 py-1"
+                      className="rounded-xl bg-teal-50 px-3 py-1 dark:bg-teal-950"
                     >
-                      <Text className="text-sm font-bold text-teal-800">
+                      <Text className="text-sm font-bold text-teal-800 dark:text-teal-300">
                         {w}
                       </Text>
                     </View>
@@ -835,9 +843,9 @@ export default function TranslatorScreen() {
             </View>
 
             {/* Kalimat Natural Hasil Akhir */}
-            <View className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <View className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
               <View className="mb-1 flex-row items-center justify-between">
-                <Text className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+                <Text className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                   Kalimat Natural
                 </Text>
                 {naturalSentence ? (
@@ -861,17 +869,17 @@ export default function TranslatorScreen() {
                     </Pressable>
                     <Pressable
                       onPress={() => setFullscreenText(naturalSentence)}
-                      className="flex-row items-center rounded-lg bg-slate-200 px-2.5 py-1.5 active:bg-slate-300"
+                      className="flex-row items-center rounded-lg bg-slate-200 px-2.5 py-1.5 active:bg-slate-300 dark:bg-slate-700"
                     >
                       <Maximize2 size={13} color="#0F172A" />
-                      <Text className="ml-1 text-xs font-bold text-slate-900">
+                      <Text className="ml-1 text-xs font-bold text-slate-900 dark:text-white">
                         Layar Penuh
                       </Text>
                     </Pressable>
                   </View>
                 ) : null}
               </View>
-              <Text className="text-2xl font-extrabold text-slate-950">
+              <Text className="text-2xl font-extrabold text-slate-950 dark:text-white">
                 {naturalSentence ||
                   "Tekan 'Rangkai & Ucapkan' untuk membuat kalimat natural."}
               </Text>
@@ -1023,14 +1031,14 @@ export default function TranslatorScreen() {
           keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
         >
           {/* Header Giliran Pembicara & Aksi Sesi */}
-          <View className="border-b border-slate-200 bg-white px-4 py-3">
+          <View className="border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
             <View className="mb-2.5 flex-row items-center justify-between">
               <Pressable
                 onPress={() => setAutoSpeakDeaf((prev) => !prev)}
                 className={`flex-row items-center rounded-full border px-3 py-1.5 ${
                   autoSpeakDeaf
-                    ? "border-teal-200 bg-teal-50"
-                    : "border-slate-200 bg-slate-100"
+                    ? "border-teal-200 bg-teal-50 dark:border-teal-800 dark:bg-teal-950"
+                    : "border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800"
                 }`}
               >
                 {autoSpeakDeaf ? (
@@ -1040,7 +1048,9 @@ export default function TranslatorScreen() {
                 )}
                 <Text
                   className={`ml-1.5 text-xs font-bold ${
-                    autoSpeakDeaf ? "text-teal-700" : "text-slate-600"
+                    autoSpeakDeaf
+                      ? "text-teal-700 dark:text-teal-300"
+                      : "text-slate-600 dark:text-slate-300"
                   }`}
                 >
                   Auto-Speak {autoSpeakDeaf ? "ON" : "OFF"}
@@ -1050,16 +1060,16 @@ export default function TranslatorScreen() {
               <View className="flex-row items-center gap-2">
                 <Pressable
                   onPress={handleSaveChatSession}
-                  className="flex-row items-center rounded-xl bg-teal-50 px-3 py-1.5 active:bg-teal-100"
+                  className="flex-row items-center rounded-xl bg-teal-50 px-3 py-1.5 active:bg-teal-100 dark:bg-teal-950"
                 >
                   <BookmarkPlus size={14} color="#0D9488" />
-                  <Text className="ml-1 text-xs font-bold text-teal-700">
+                  <Text className="ml-1 text-xs font-bold text-teal-700 dark:text-teal-300">
                     Simpan Sesi
                   </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => setChatMessages([])}
-                  className="rounded-xl bg-rose-50 px-2.5 py-1.5 active:bg-rose-100"
+                  className="rounded-xl bg-rose-50 px-2.5 py-1.5 active:bg-rose-100 dark:bg-rose-950"
                   accessibilityLabel="Bersihkan Chat"
                 >
                   <Trash2 size={15} color="#E11D48" />
@@ -1074,12 +1084,14 @@ export default function TranslatorScreen() {
                 className={`flex-1 items-center rounded-2xl border py-2.5 ${
                   chatRole === "deaf"
                     ? "border-teal-600 bg-teal-600"
-                    : "border-slate-200 bg-slate-50"
+                    : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800"
                 }`}
               >
                 <Text
                   className={`text-sm font-extrabold ${
-                    chatRole === "deaf" ? "text-white" : "text-slate-700"
+                    chatRole === "deaf"
+                      ? "text-white"
+                      : "text-slate-700 dark:text-slate-200"
                   }`}
                 >
                   Saya (Teman Tuli)
@@ -1090,13 +1102,15 @@ export default function TranslatorScreen() {
                 onPress={() => setChatRole("hearing")}
                 className={`flex-1 items-center rounded-2xl border py-2.5 ${
                   chatRole === "hearing"
-                    ? "border-slate-900 bg-slate-900"
-                    : "border-slate-200 bg-slate-50"
+                    ? "border-slate-900 bg-slate-900 dark:border-slate-100 dark:bg-slate-100"
+                    : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800"
                 }`}
               >
                 <Text
                   className={`text-sm font-extrabold ${
-                    chatRole === "hearing" ? "text-white" : "text-slate-700"
+                    chatRole === "hearing"
+                      ? "text-white dark:text-slate-900"
+                      : "text-slate-700 dark:text-slate-200"
                   }`}
                 >
                   Lawan Bicara (Dengar)
@@ -1108,19 +1122,21 @@ export default function TranslatorScreen() {
           {/* Daftar Gelembung Chat (WA / IG Style) */}
           <ScrollView
             ref={chatScrollRef}
-            className="flex-1 bg-slate-50"
+            className="flex-1 bg-slate-50 dark:bg-slate-950"
             contentContainerStyle={{ padding: 16, paddingBottom: 24, flexGrow: 1 }}
           >
             {chatMessages.length === 0 ? (
               <View className="flex-1 items-center justify-center px-6 py-12">
-                <Text className="text-center text-lg font-extrabold text-slate-800">
+                <Text className="text-center text-lg font-extrabold text-slate-800 dark:text-white">
                   Komunikasi Bergantian 1 Perangkat
                 </Text>
-                <Text className="mt-2 text-center text-sm leading-relaxed text-slate-500">
+                <Text className="mt-2 text-center text-sm leading-relaxed text-slate-500 dark:text-slate-400">
                   • Ketik pesan sebagai{" "}
-                  <Text className="font-bold text-teal-700">Saya</Text> agar
-                  otomatis dibacakan dengan suara.{"\n"}• Tekan{" "}
-                  <Text className="font-bold text-slate-800">
+                  <Text className="font-bold text-teal-700 dark:text-teal-400">
+                    Saya
+                  </Text>{" "}
+                  agar otomatis dibacakan dengan suara.{"\n"}• Tekan{" "}
+                  <Text className="font-bold text-slate-800 dark:text-slate-200">
                     Rekam Suara Lawan Bicara
                   </Text>{" "}
                   untuk mengubah ucapan mereka menjadi teks besar di layar.
@@ -1136,13 +1152,15 @@ export default function TranslatorScreen() {
                       className={`max-w-[88%] rounded-3xl p-4 ${
                         isDeaf
                           ? "self-end rounded-br-md bg-teal-600"
-                          : "self-start rounded-bl-md border border-slate-200 bg-white"
+                          : "self-start rounded-bl-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
                       }`}
                     >
                       <View className="mb-1 flex-row items-center justify-between gap-3">
                         <Text
                           className={`text-xs font-extrabold uppercase ${
-                            isDeaf ? "text-teal-100" : "text-teal-700"
+                            isDeaf
+                              ? "text-teal-100"
+                              : "text-teal-700 dark:text-teal-400"
                           }`}
                         >
                           {isDeaf ? "Saya (Teman Tuli)" : "Lawan Bicara"}
@@ -1159,7 +1177,9 @@ export default function TranslatorScreen() {
 
                       <Text
                         className={`text-xl font-bold leading-snug ${
-                          isDeaf ? "text-white" : "text-slate-900"
+                          isDeaf
+                            ? "text-white"
+                            : "text-slate-900 dark:text-white"
                         }`}
                       >
                         {msg.text}
@@ -1171,16 +1191,18 @@ export default function TranslatorScreen() {
                           className={`flex-row items-center rounded-xl px-2.5 py-1.5 ${
                             isDeaf
                               ? "bg-white/20 active:bg-white/30"
-                              : "bg-slate-100 active:bg-slate-200"
+                              : "bg-slate-100 active:bg-slate-200 dark:bg-slate-800"
                           }`}
                         >
                           <Volume2
                             size={14}
-                            color={isDeaf ? "#FFFFFF" : "#0F172A"}
+                            color={isDeaf ? "#FFFFFF" : "#0D9488"}
                           />
                           <Text
                             className={`ml-1 text-xs font-bold ${
-                              isDeaf ? "text-white" : "text-slate-800"
+                              isDeaf
+                                ? "text-white"
+                                : "text-slate-800 dark:text-slate-200"
                             }`}
                           >
                             Putar Suara
@@ -1192,16 +1214,18 @@ export default function TranslatorScreen() {
                           className={`flex-row items-center rounded-xl px-2.5 py-1.5 ${
                             isDeaf
                               ? "bg-white/20 active:bg-white/30"
-                              : "bg-slate-100 active:bg-slate-200"
+                              : "bg-slate-100 active:bg-slate-200 dark:bg-slate-800"
                           }`}
                         >
                           <Maximize2
                             size={14}
-                            color={isDeaf ? "#FFFFFF" : "#0F172A"}
+                            color={isDeaf ? "#FFFFFF" : "#0D9488"}
                           />
                           <Text
                             className={`ml-1 text-xs font-bold ${
-                              isDeaf ? "text-white" : "text-slate-800"
+                              isDeaf
+                                ? "text-white"
+                                : "text-slate-800 dark:text-slate-200"
                             }`}
                           >
                             Perbesar
@@ -1248,7 +1272,7 @@ export default function TranslatorScreen() {
           )}
 
           {/* Input Bar Bergaya WA/IG */}
-          <View className="border-t border-slate-200 bg-white px-3 pb-3 pt-2.5">
+          <View className="border-t border-slate-200 bg-white px-3 pb-3 pt-2.5 dark:border-slate-800 dark:bg-slate-900">
             {/* Tombol Aksi Cepat Rekam Suara Lawan Bicara */}
             <Pressable
               onPress={() => toggleChatRecording("hearing")}
@@ -1256,7 +1280,7 @@ export default function TranslatorScreen() {
               className={`mb-2.5 flex-row items-center justify-center rounded-2xl py-3 ${
                 isRecordingChat
                   ? "bg-rose-600 active:bg-rose-700"
-                  : "bg-slate-900 active:bg-slate-800"
+                  : "bg-slate-900 active:bg-slate-800 dark:bg-teal-700"
               }`}
             >
               {isRecordingChat ? (
@@ -1282,7 +1306,7 @@ export default function TranslatorScreen() {
                 }
                 placeholderTextColor="#94A3B8"
                 multiline
-                className="max-h-28 min-h-[48px] flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900"
+                className="max-h-28 min-h-[48px] flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
 
               <Pressable

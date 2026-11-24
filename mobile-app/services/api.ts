@@ -168,6 +168,24 @@ export interface STTResponse {
   warning?: string | null;
 }
 
+export type SoundCategory =
+  | "klakson"
+  | "sirine"
+  | "alarm"
+  | "teriakan"
+  | "ketukan"
+  | "bising"
+  | "tenang";
+
+export interface SoundDetectResponse {
+  detected: boolean;
+  category: SoundCategory;
+  sound_type: string;
+  severity: AlertSeverity;
+  confidence: number;
+  decibel_level: number;
+}
+
 export interface TTSBase64Response {
   audio_base64: string;
   mime_type: string;
@@ -547,6 +565,28 @@ export const api = {
         0
       );
     }
+  },
+
+  detectSoundPattern: async (
+    baseUrl: string,
+    fileUri: string
+  ): Promise<SoundDetectResponse> => {
+    const endpoint = `${normalizeBaseUrl(baseUrl)}/api/classify-sound`;
+    const result = await FileSystem.uploadAsync(endpoint, fileUri, {
+      httpMethod: "POST",
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName: "file",
+      mimeType: "audio/mp4",
+      headers: { Accept: "application/json" },
+    });
+
+    if (result.status < 200 || result.status >= 300) {
+      throw new ApiError(
+        `Deteksi pola suara gagal (HTTP ${result.status})`,
+        result.status
+      );
+    }
+    return JSON.parse(result.body) as SoundDetectResponse;
   },
 
   synthesizeSpeechBase64: (

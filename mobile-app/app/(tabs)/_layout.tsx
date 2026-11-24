@@ -8,21 +8,25 @@ import {
 import React from "react";
 import { Platform } from "react-native";
 
+import { useApp } from "@/context/AppContext";
+
 export default function TabsLayout() {
+  const { isDark } = useApp();
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: "#0D9488",
-        tabBarInactiveTintColor: "#64748B",
+        tabBarActiveTintColor: isDark ? "#2DD4BF" : "#0D9488",
+        tabBarInactiveTintColor: isDark ? "#94A3B8" : "#64748B",
         tabBarLabelStyle: {
           fontSize: 12,
           fontWeight: "700",
           marginBottom: Platform.OS === "ios" ? 0 : 4,
         },
         tabBarStyle: {
-          backgroundColor: "#FFFFFF",
-          borderTopColor: "#E2E8F0",
+          backgroundColor: isDark ? "#0F172A" : "#FFFFFF",
+          borderTopColor: isDark ? "#1E293B" : "#E2E8F0",
           borderTopWidth: 1,
           height: Platform.OS === "ios" ? 86 : 68,
           paddingTop: 8,

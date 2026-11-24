@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useColorScheme } from "nativewind";
 import React, {
   createContext,
   useCallback,
@@ -30,7 +31,10 @@ const STORAGE_KEYS = {
   AUTH_TOKEN: "@isyarat_kita:auth_token",
   USER_PROFILE: "@isyarat_kita:user_profile",
   USER_SETTINGS: "@isyarat_kita:user_settings",
+  THEME_MODE: "@isyarat_kita:theme_mode",
 };
+
+export type ThemeMode = "light" | "dark" | "system";
 
 const FALLBACK_SERVER_URL = "http://192.168.1.6:8000";
 
@@ -46,6 +50,9 @@ export type ServerStatus = "checking" | "connected" | "disconnected";
 
 interface AppContextValue {
   isHydrated: boolean;
+  themeMode: ThemeMode;
+  isDark: boolean;
+  setThemeMode: (mode: ThemeMode) => Promise<void>;
   serverUrl: string;
   detectedHostUrl: string | null;
   serverStatus: ServerStatus;
@@ -91,6 +98,10 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const { colorScheme, setColorScheme } = useColorScheme();
+  const [themeMode, setThemeModeState] = useState<ThemeMode>("light");
+  const isDark = colorScheme === "dark";
+
   const detectedHostUrl = detectExpoHostServerUrl(8000);
   const [isHydrated, setIsHydrated] = useState(false);
   const [serverUrl, setServerUrlState] = useState(
@@ -182,13 +193,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let active = true;
     (async () => {
       try {
-        const [savedUrl, savedToken, savedUserRaw, savedSettingsRaw] =
+        const [savedUrl, savedToken, savedUserRaw, savedSettingsRaw, savedTheme] =
           await AsyncStorage.multiGet([
             STORAGE_KEYS.SERVER_URL,
             STORAGE_KEYS.AUTH_TOKEN,
             STORAGE_KEYS.USER_PROFILE,
             STORAGE_KEYS.USER_SETTINGS,
+            STORAGE_KEYS.THEME_MODE,
           ]);
+
+        const resolvedTheme = (savedTheme[1] as ThemeMode) || "light";
+        if (active) {
+          setThemeModeState(resolvedTheme);
+          setColorScheme(resolvedTheme);
+        }
 
         const autoUrl = detectExpoHostServerUrl(8000);
         const storedUrl = savedUrl[1] ? normalizeBaseUrl(savedUrl[1]) : null;
@@ -240,6 +258,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       active = false;
     };
   }, [refreshHealth, refreshCardsWith, refreshLogsWith, refreshAlertsWith]);
+
+  const setThemeMode = useCallback(
+    async (mode: ThemeMode) => {
+      setThemeModeState(mode);
+      setColorScheme(mode);
+      await AsyncStorage.setItem(STORAGE_KEYS.THEME_MODE, mode);
+    },
+    [setColorScheme]
+  );
 
   const openAuthModal = useCallback(
     (reason = "Masuk untuk menyimpan kartu kustom dan riwayat Anda.", onAuthenticated?: () => void) => {
@@ -499,6 +526,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider
       value={{
         isHydrated,
+        themeMode,
+        isDark,
+        setThemeMode,
         serverUrl,
         detectedHostUrl,
         serverStatus,

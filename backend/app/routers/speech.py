@@ -11,7 +11,8 @@ import numpy as np
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 
 from app.core.config import settings
-from app.schemas.ai import STTResponse, TTSRequest
+from app.schemas.ai import SoundDetectResponse, STTResponse, TTSRequest
+from app.services.sound_classifier import sound_classifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Audio STT & TTS"])
@@ -168,6 +169,59 @@ async def speech_to_text(file: UploadFile = File(...)) -> STTResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error konversi/transkripsi di server: {exc}",
+        ) from exc
+    finally:
+        for path_to_clean in (wav_tmp_path, raw_tmp_path):
+            if path_to_clean and os.path.exists(path_to_clean):
+                try:
+                    os.remove(path_to_clean)
+                except OSError:
+                    pass
+
+
+@router.post("/classify-sound", response_model=SoundDetectResponse)
+@router.post("/detect-sound", response_model=SoundDetectResponse)
+async def detect_sound_pattern(file: UploadFile = File(...)) -> SoundDetectResponse:
+    """
+    Deteksi pola suara darurat/lingkungan dari potongan rekaman audio (.m4a/.wav/.3gp):
+    Klakson, Sirine, Alarm/Bel, Teriakan, Ketukan Keras, atau Bising Lingkungan.
+    """
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File audio kosong.",
+        )
+
+    suffix = Path(file.filename or "sound_clip.m4a").suffix.lower() or ".m4a"
+    raw_tmp_path: str | None = None
+    wav_tmp_path: str | None = None
+
+    try:
+        raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        raw_tmp_path = raw_tmp.name
+        raw_tmp.write(audio_bytes)
+        raw_tmp.flush()
+        raw_tmp.close()
+
+        wav_tmp_path = _convert_to_wav_16k(raw_tmp_path)
+        audio_np = _load_wav_as_float32(wav_tmp_path)
+        result = sound_classifier.classify(audio_np, sample_rate=16000)
+        logger.info(
+            "[SOUND] Pola terdeteksi: %s (%s, %.1f dB, conf=%.2f)",
+            result["sound_type"],
+            result["severity"],
+            result["decibel_level"],
+            result["confidence"],
+        )
+        return SoundDetectResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[SOUND] Gagal menganalisis pola suara: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal menganalisis pola suara: {exc}",
         ) from exc
     finally:
         for path_to_clean in (wav_tmp_path, raw_tmp_path):

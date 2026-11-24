@@ -62,6 +62,17 @@ class STTResponse(BaseModel):
     warning: Optional[str] = None
 
 
+class SoundDetectResponse(BaseModel):
+    detected: bool
+    category: Literal[
+        "klakson", "sirine", "alarm", "teriakan", "ketukan", "bising", "tenang"
+    ]
+    sound_type: str
+    severity: Literal["warning", "danger"]
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    decibel_level: float = Field(..., ge=0.0, le=120.0)
+
+
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=1000)
     voice: Literal[

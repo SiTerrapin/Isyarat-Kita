@@ -26,8 +26,10 @@ numpy>=1.26.0
 rapidfuzz>=3.9.0
 Sastrawi>=1.0.1
 
-# Audio Speech-to-Text (STT) & Multi-Voice Text-to-Speech (TTS)
+# Audio STT, Sound Pattern Detection & Multi-Voice TTS
 faster-whisper>=1.1.0
+transformers>=4.45.0
+scipy>=1.14.0
 imageio-ffmpeg>=0.5.1
 edge-tts>=6.1.12
 gTTS>=2.5.0
