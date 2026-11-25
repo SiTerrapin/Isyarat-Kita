@@ -1,14 +1,14 @@
+from contextlib import asynccontextmanager
 import logging
 import time
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.database import get_db
-from app.routers import ai, alerts, auth, cards, logs, settings as settings_router, speech
+from app.db.database import SessionLocal, init_db
+from app.routers import ai, alerts, auth, camera_view, cards, logs, settings as settings_router, speech
 from app.services.vision_service import vision_service
 
 logging.basicConfig(
@@ -17,6 +17,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("isyarat_kita.http")
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
@@ -24,6 +31,7 @@ app = FastAPI(
         "Backend REST API untuk aplikasi mobile Isyarat Kita — "
         "Asisten Komunikasi Dua Arah BISINDO & Peringatan Suara Darurat untuk Teman Tuli."
     ),
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -69,22 +77,25 @@ app.include_router(logs.router)
 app.include_router(alerts.router)
 app.include_router(settings_router.router)
 app.include_router(ai.router)
+app.include_router(camera_view.router)
 app.include_router(speech.router)
 
 
+@app.get("/", tags=["System Health"])
 @app.get("/health", tags=["System Health"])
-def health_check(db: Session = Depends(get_db)) -> dict[str, object]:
-    db_status = "connected"
-    overall_status = "ok"
+@app.get("/api/health", tags=["System Health"])
+def health_check() -> dict[str, object]:
+    db_status = "disconnected"
     try:
-        db.execute(text("SELECT 1"))
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+            db_status = "connected"
     except Exception:
         db_status = "disconnected"
-        overall_status = "degraded"
 
     ai_status = vision_service.get_status()
     return {
-        "status": overall_status,
+        "status": "ok",
         "database": db_status,
         "ai_mode": ai_status["ai_mode"],
         "model_loaded": ai_status["model_loaded"],

@@ -1,4 +1,4 @@
-{"gloss": "HALO NAMA SAYA NAFAN", "natural": "Halo, perkenalkan nama saya Nafan.", "reply": "Halo Mas Nafan! Senang berkenalan denganmu. Ada yang ingin kita obrolkan hari ini?"}
+{"gloss": "HALO SALAM KENAL", "natural": "Halo, salam kenal.", "reply": "Halo! Salam kenal juga. Senang bisa berkomunikasi denganmu hari ini."}
 {"gloss": "HALO APA KABAR KAMU", "natural": "Halo, bagaimana kabarmu hari ini?", "reply": "Halo! Kabarku sangat baik, terima kasih sudah bertanya. Bagaimana dengan kabarmu sendiri?"}
 {"gloss": "SAYA MAU MAKAN NASI", "natural": "Saya sedang ingin makan nasi.", "reply": "Wah, kebetulan sudah jam makan! Mau makan nasi pakai lauk apa hari ini?"}
 {"gloss": "KAMPUS SAYA PERGI PAGI", "natural": "Saya mau berangkat ke kampus pagi ini.", "reply": "Hati-hati di jalan menuju kampus ya! Semoga kuliahnya lancar hari ini."}
@@ -12,3 +12,7 @@
 {"gloss": "BESOK KITA KETEMU KAMPUS JAM PAGI", "natural": "Besok pagi kita bertemu di kampus ya.", "reply": "Siap, sampai ketemu besok pagi di kampus! Nanti kabari saja kalau sudah sampai."}
 {"gloss": "BERAPA HARGA MAKAN INI", "natural": "Permisi, berapa harga makanan ini?", "reply": "Untuk daftar harga lengkapnya bisa dilihat di menu, atau saya bantu tanyakan ke penjualnya ya."}
 {"gloss": "SAYA SENANG BISA NGOBROL BAHASA ISYARAT", "natural": "Saya senang sekali bisa mengobrol menggunakan bahasa isyarat.", "reply": "Aku juga ikut senang! Bahasa isyarat BISINDO sangat ekspresif dan membantu komunikasi jadi lebih inklusif."}
+{"gloss": "HALO SELAMAT PAGI", "natural": "Halo, selamat pagi.", "reply": "Selamat pagi! Semoga harimu menyenangkan."}
+{"gloss": "PERMISI MAU TANYA", "natural": "Permisi, saya mau bertanya.", "reply": "Silakan, ada yang bisa saya bantu?"}
+{"gloss": "TOLONG BANTU SAYA", "natural": "Tolong bantu saya.", "reply": "Tentu, dengan senang hati. Bantuan apa yang sedang kamu butuhkan?"}
+{"gloss": "TERIMA KASIH BANYAK", "natural": "Terima kasih banyak.", "reply": "Sama-sama! Senang bisa membantu."}

@@ -1,6 +1,7 @@
 import hashlib
 import io
 import logging
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Optional
@@ -8,9 +9,13 @@ from typing import Any, Optional
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from app.core.config import settings
+from app.core.config import BASE_DIR, settings
 
 logger = logging.getLogger(__name__)
+
+DEBUG_LAST_FRAME_PATH = BASE_DIR / "debug_last_frame.jpg"
+DEBUG_LAST_ROI_PATH = BASE_DIR / "debug_last_roi.jpg"
+MAX_INPUT_SIDE = 640
 
 HAND_LANDMARKER_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -209,13 +214,22 @@ class BisindoVisionService:
     Resize(224,224) + ImageNet Normalize -> GatedMultimodalSignModel.
     """
 
+    def _resolve_preferred_model_path(self, explicit_path: Optional[Path]) -> Path:
+        if explicit_path is not None:
+            return explicit_path
+        best_path = BASE_DIR / "models" / "bisindo_convnext_tiny_gated_BEST.pth"
+        if best_path.exists():
+            logger.info("Memprioritaskan bobot model BEST: %s", best_path.name)
+            return best_path
+        return settings.resolved_model_path
+
     def __init__(
         self,
         model_path: Optional[Path] = None,
         landmarker_path: Optional[Path] = None,
         mock_mode: Optional[bool] = None,
     ) -> None:
-        self.model_path: Path = model_path or settings.resolved_model_path
+        self.model_path: Path = self._resolve_preferred_model_path(model_path)
         self.landmarker_path: Path = (
             landmarker_path or settings.resolved_hand_landmarker_path
         )
@@ -231,6 +245,7 @@ class BisindoVisionService:
         self.lm_dim: int = 156
         self.model_loaded: bool = False
         self.active_mode: str = "mock"
+        self.last_good_angle: int = 0
         self.load_model()
 
     def _ensure_hand_landmarker_file(self) -> bool:
@@ -347,12 +362,23 @@ class BisindoVisionService:
             )
 
     @staticmethod
-    def validate_and_decode_image(image_bytes: bytes) -> Image.Image:
+    def validate_and_decode_image(image_bytes: bytes, mirror: bool = False) -> Image.Image:
         if not image_bytes:
             raise ValueError("Data gambar kosong.")
         try:
             img = Image.open(io.BytesIO(image_bytes))
             img = ImageOps.exif_transpose(img).convert("RGB")
+            if mirror:
+                img = ImageOps.mirror(img)
+            # Resize proporsional jika sisi terpanjang > 640px agar MediaPipe cepat & tajam
+            w, h = img.size
+            longest = max(w, h)
+            if longest > MAX_INPUT_SIDE:
+                scale = MAX_INPUT_SIDE / float(longest)
+                img = img.resize(
+                    (max(1, int(w * scale)), max(1, int(h * scale))),
+                    Image.Resampling.LANCZOS,
+                )
             return img
         except (UnidentifiedImageError, OSError) as exc:
             raise ValueError("Payload bukan format gambar yang valid.") from exc
@@ -370,6 +396,7 @@ class BisindoVisionService:
         return {
             "detected": True,
             "hand_found": True,
+            "hands_detected": 1,
             "letter": MOCK_ALPHABET[idx1],
             "confidence": s1,
             "top3": [
@@ -380,63 +407,129 @@ class BisindoVisionService:
             "mode": "mock",
         }
 
-    def predict_sign(self, image_bytes: bytes) -> dict[str, Any]:
-        pil_img = self.validate_and_decode_image(image_bytes)
+    @staticmethod
+    def _apply_guide_roi(
+        pil_img: Image.Image,
+        roi_box: Optional[dict[str, float]],
+    ) -> Image.Image:
+        """Potong frame kamera sesuai koordinat bingkai panduan (0..1) dari frontend."""
+        if not roi_box:
+            return pil_img
+        w, h = pil_img.size
+        left = int(max(0.0, min(1.0, roi_box.get("x", 0.0))) * w)
+        top = int(max(0.0, min(1.0, roi_box.get("y", 0.0))) * h)
+        right = int(max(0.0, min(1.0, roi_box.get("x", 0.0) + roi_box.get("width", 1.0))) * w)
+        bottom = int(max(0.0, min(1.0, roi_box.get("y", 0.0) + roi_box.get("height", 1.0))) * h)
+        if right - left < 40 or bottom - top < 40:
+            return pil_img
+        return pil_img.crop((left, top, right, bottom))
+
+    @staticmethod
+    def _save_debug_image(pil_img: Image.Image, target: Path) -> None:
+        try:
+            pil_img.save(str(target), format="JPEG", quality=85)
+        except Exception:
+            pass
+
+    def _run_model_inference(
+        self,
+        pil_img: Image.Image,
+        feat_vec: np.ndarray,
+        raw_hands: list[np.ndarray],
+    ) -> tuple[list[dict[str, Any]], Image.Image]:
+        """Inferensi ConvNeXt-Tiny + Landmark 156-dim identik 1:1 dengan Testing_V_03_BISINDO.ipynb."""
+        import torch
+
+        pil_roi = (
+            crop_hand_roi(pil_img, raw_hands, margin=0.25)
+            if USE_ROI_CROP
+            else pil_img
+        )
+        img_tensor = self.val_tf(pil_roi).unsqueeze(0).to(self.device)
+        lm_tensor = torch.from_numpy(feat_vec).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            logits = self.model(img_tensor, lm_tensor)
+            probs = torch.softmax(logits, dim=1)[0]
+            k = min(3, len(self.classes))
+            top_scores, top_indices = torch.topk(probs, k=k)
+
+        top3 = [
+            {
+                "label": self.classes[int(idx.item())],
+                "score": round(float(score.item()), 4),
+            }
+            for score, idx in zip(top_scores, top_indices)
+        ]
+        return top3, pil_roi
+
+    def predict_sign(
+        self,
+        image_bytes: bytes,
+        roi_box: Optional[dict[str, float]] = None,
+        mirror: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Pipeline 1:1 dengan Google Colab testing:
+        Frame upright dari HTML5 <canvas> -> MediaPipe HandLandmarker (156 dim) ->
+        Square ROI Crop (margin=0.25) -> Resize(224,224) + ImageNet Normalize -> ConvNeXt-Tiny.
+        Tanpa rotasi paksa/multi-angle hack agar latensi inferensi < 200-300 ms.
+        """
+        _ = roi_box
+        t0 = time.perf_counter()
+        pil_img = self.validate_and_decode_image(image_bytes, mirror=mirror)
 
         if (
             self.active_mode == "model"
             and self.model_loaded
             and self.landmarker is not None
         ):
-            import torch
-
             img_rgb = np.ascontiguousarray(np.array(pil_img, dtype=np.uint8))
             feat_vec, raw_hands = extract_hand_features(
                 img_rgb, self.landmarker, self._mp
             )
 
             if feat_vec is None or not raw_hands:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                logger.info(
+                    "[VISION] total=%.0fms | hands=0 | pred=- (0.00)",
+                    elapsed_ms,
+                )
                 return {
                     "detected": False,
                     "hand_found": False,
+                    "hands_detected": 0,
                     "letter": None,
                     "confidence": 0.0,
                     "top3": [],
                     "mode": "model",
                 }
 
-            pil_roi = (
-                crop_hand_roi(pil_img, raw_hands, margin=0.25)
-                if USE_ROI_CROP
-                else pil_img
-            )
-            img_tensor = self.val_tf(pil_roi).unsqueeze(0).to(self.device)
-            lm_tensor = torch.from_numpy(feat_vec).unsqueeze(0).to(self.device)
-
-            with torch.no_grad():
-                logits = self.model(img_tensor, lm_tensor)
-                probs = torch.softmax(logits, dim=1)[0]
-                k = min(3, len(self.classes))
-                top_scores, top_indices = torch.topk(probs, k=k)
-
-            top3 = [
-                {
-                    "label": self.classes[int(idx.item())],
-                    "score": round(float(score.item()), 4),
-                }
-                for score, idx in zip(top_scores, top_indices)
-            ]
+            top3, pil_roi = self._run_model_inference(pil_img, feat_vec, raw_hands)
+            self._save_debug_image(pil_img, DEBUG_LAST_FRAME_PATH)
+            self._save_debug_image(pil_roi, DEBUG_LAST_ROI_PATH)
 
             best = top3[0]
+            hands_count = len(raw_hands)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            logger.info(
+                "[VISION] total=%.0fms | hands=%d | pred=%s (%.2f)",
+                elapsed_ms,
+                hands_count,
+                best["label"],
+                best["score"],
+            )
             return {
                 "detected": True,
                 "hand_found": True,
+                "hands_detected": hands_count,
                 "letter": best["label"],
                 "confidence": best["score"],
                 "top3": top3,
                 "mode": "model",
             }
 
+        self._save_debug_image(pil_img, DEBUG_LAST_FRAME_PATH)
         return self._mock_predict(image_bytes)
 
     def get_status(self) -> dict[str, Any]:

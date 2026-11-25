@@ -183,8 +183,7 @@ async def speech_to_text(file: UploadFile = File(...)) -> STTResponse:
 @router.post("/detect-sound", response_model=SoundDetectResponse)
 async def detect_sound_pattern(file: UploadFile = File(...)) -> SoundDetectResponse:
     """
-    Deteksi pola suara darurat/lingkungan dari potongan rekaman audio (.m4a/.wav/.3gp):
-    Klakson, Sirine, Alarm/Bel, Teriakan, Ketukan Keras, atau Bising Lingkungan.
+    Deteksi cepat pola suara darurat/harian + filter anti-gesekan mic (tanpa STT blocking).
     """
     audio_bytes = await file.read()
     if not audio_bytes:
@@ -207,13 +206,6 @@ async def detect_sound_pattern(file: UploadFile = File(...)) -> SoundDetectRespo
         wav_tmp_path = _convert_to_wav_16k(raw_tmp_path)
         audio_np = _load_wav_as_float32(wav_tmp_path)
         result = sound_classifier.classify(audio_np, sample_rate=16000)
-        logger.info(
-            "[SOUND] Pola terdeteksi: %s (%s, %.1f dB, conf=%.2f)",
-            result["sound_type"],
-            result["severity"],
-            result["decibel_level"],
-            result["confidence"],
-        )
         return SoundDetectResponse(**result)
     except HTTPException:
         raise

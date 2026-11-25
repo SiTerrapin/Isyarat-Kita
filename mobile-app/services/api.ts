@@ -142,9 +142,17 @@ export interface TopPrediction {
   score: number;
 }
 
+export interface RoiBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface PredictSignResponse {
   detected: boolean;
   hand_found: boolean;
+  hands_detected?: number;
   letter: string | null;
   confidence: number;
   top3: TopPrediction[];
@@ -158,8 +166,15 @@ export interface CorrectWordResponse {
 
 export interface RefineTextResponse {
   sentence: string;
+  refined_text?: string;
   source: "dataset" | "rule" | "llm";
   raw_gloss: string[];
+  ai_reply?: string | null;
+}
+
+export interface ChatAIResponse {
+  refined_text: string;
+  ai_reply: string;
 }
 
 export interface STTResponse {
@@ -169,21 +184,24 @@ export interface STTResponse {
 }
 
 export type SoundCategory =
-  | "klakson"
-  | "sirine"
-  | "alarm"
-  | "teriakan"
-  | "ketukan"
-  | "bising"
-  | "tenang";
+  | "emergency"
+  | "traffic"
+  | "danger"
+  | "home"
+  | "none";
+
+export type SoundSeverity = "high" | "medium" | "low";
 
 export interface SoundDetectResponse {
+  is_alert: boolean;
   detected: boolean;
   category: SoundCategory;
+  label_id: string;
   sound_type: string;
-  severity: AlertSeverity;
   confidence: number;
+  severity: SoundSeverity;
   decibel_level: number;
+  raw_label?: string | null;
 }
 
 export interface TTSBase64Response {
@@ -259,7 +277,11 @@ export class ApiError extends Error {
 }
 
 export function normalizeBaseUrl(url: string): string {
-  return url.trim().replace(/\/+$/, "");
+  return url
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/\/+$/, "")
+    .replace(/\/(api\/)?health$/i, "");
 }
 
 /**
@@ -377,8 +399,25 @@ async function request<T>(
 }
 
 export const api = {
-  checkHealth: (baseUrl: string) =>
-    request<HealthResponse>(baseUrl, "/health", { timeoutMs: 7000 }),
+  checkHealth: async (baseUrl: string): Promise<HealthResponse> => {
+    const cleanBase = normalizeBaseUrl(baseUrl);
+    const primaryUrl = `${cleanBase}/health`;
+    console.log(`[HEALTH] Testing: ${primaryUrl}`);
+    try {
+      return await request<HealthResponse>(cleanBase, "/health", {
+        timeoutMs: 10000,
+      });
+    } catch (err: any) {
+      if (err instanceof ApiError && err.status === 404) {
+        const fallbackUrl = `${cleanBase}/api/health`;
+        console.log(`[HEALTH] 404 on /health, retrying: ${fallbackUrl}`);
+        return await request<HealthResponse>(cleanBase, "/api/health", {
+          timeoutMs: 10000,
+        });
+      }
+      throw err;
+    }
+  },
 
   register: (
     baseUrl: string,
@@ -466,10 +505,17 @@ export const api = {
       body: payload,
     }),
 
-  predictSignBase64: (baseUrl: string, imageBase64: string) =>
+  predictSignBase64: (
+    baseUrl: string,
+    imageBase64: string,
+    roiBox?: RoiBox | null,
+    mirror = false
+  ) =>
     request<PredictSignResponse>(baseUrl, "/api/predict-sign", {
       method: "POST",
-      body: { image_base64: imageBase64 },
+      body: roiBox
+        ? { image_base64: imageBase64, roi_box: roiBox, mirror }
+        : { image_base64: imageBase64, mirror },
       timeoutMs: 15000,
     }),
 
@@ -483,10 +529,18 @@ export const api = {
       body: { letters, prev_word: prevWord ?? null },
     }),
 
-  refineText: (baseUrl: string, gloss: string[]) =>
+  refineText: (baseUrl: string, gloss: string[], includeReply = false) =>
     request<RefineTextResponse>(baseUrl, "/api/refine-text", {
       method: "POST",
-      body: { gloss },
+      body: { gloss, include_reply: includeReply },
+      timeoutMs: 15000,
+    }),
+
+  chatAI: (baseUrl: string, text: string) =>
+    request<ChatAIResponse>(baseUrl, "/api/chat-ai", {
+      method: "POST",
+      body: { text },
+      timeoutMs: 12000,
     }),
 
   transcribeAudio: async (

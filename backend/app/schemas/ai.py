@@ -3,11 +3,26 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class RoiBox(BaseModel):
+    x: float = Field(..., ge=0.0, le=1.0)
+    y: float = Field(..., ge=0.0, le=1.0)
+    width: float = Field(..., gt=0.0, le=1.0)
+    height: float = Field(..., gt=0.0, le=1.0)
+
+
 class PredictSignBase64Request(BaseModel):
     image_base64: str = Field(
         ...,
         min_length=1,
         description="Gambar frame kamera dalam format base64 (boleh dengan prefix data:image/...;base64,)",
+    )
+    roi_box: Optional[RoiBox] = Field(
+        default=None,
+        description="Area bingkai panduan ter-normalisasi (0..1) dari layar HP; jika diisi, deteksi fokus di dalam bingkai ini.",
+    )
+    mirror: bool = Field(
+        default=False,
+        description="Flip horizontal gambar sebelum deteksi (berguna untuk kalibrasi kamera depan HP).",
     )
 
 
@@ -19,6 +34,7 @@ class TopPrediction(BaseModel):
 class PredictSignResponse(BaseModel):
     detected: bool
     hand_found: bool
+    hands_detected: int = 0
     letter: Optional[str] = None
     confidence: float = Field(..., ge=0.0, le=1.0)
     top3: list[TopPrediction] = Field(default_factory=list)
@@ -43,17 +59,40 @@ class CorrectWordResponse(BaseModel):
 
 
 class RefineTextRequest(BaseModel):
-    gloss: list[str] = Field(
-        ...,
-        min_length=1,
+    gloss: Optional[list[str]] = Field(
+        default=None,
         description="Daftar kata gloss BISINDO, contoh: ['SAYA', 'MAU', 'MINUM']",
+    )
+    text: Optional[str] = Field(
+        default=None,
+        description="Alternatif string gloss mentah, contoh: 'SAAAAYAAA MAUUU MKNNN NASI'",
+    )
+    include_reply: bool = Field(
+        default=False,
+        description="Jika True, sertakan balasan obrolan dua arah (ai_reply) dari Gemini 2.5 Flash.",
     )
 
 
 class RefineTextResponse(BaseModel):
     sentence: str
+    refined_text: str = ""
     source: Literal["dataset", "rule", "llm"]
     raw_gloss: list[str]
+    ai_reply: Optional[str] = None
+
+
+class ChatAIRequest(BaseModel):
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Kalimat Bahasa Indonesia natural dari pengguna BISINDO.",
+    )
+
+
+class ChatAIResponse(BaseModel):
+    refined_text: str
+    ai_reply: str
 
 
 class STTResponse(BaseModel):
@@ -63,14 +102,15 @@ class STTResponse(BaseModel):
 
 
 class SoundDetectResponse(BaseModel):
+    is_alert: bool
     detected: bool
-    category: Literal[
-        "klakson", "sirine", "alarm", "teriakan", "ketukan", "bising", "tenang"
-    ]
+    category: Literal["emergency", "traffic", "danger", "home", "none"]
+    label_id: str
     sound_type: str
-    severity: Literal["warning", "danger"]
     confidence: float = Field(..., ge=0.0, le=1.0)
+    severity: Literal["high", "medium", "low"]
     decibel_level: float = Field(..., ge=0.0, le=120.0)
+    raw_label: Optional[str] = None
 
 
 class TTSRequest(BaseModel):

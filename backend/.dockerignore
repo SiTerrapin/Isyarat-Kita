@@ -1,0 +1,29 @@
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# Environment & secrets lokal
+.env
+.env.*
+!.env.example
+
+# Debug frames & file sementara
+debug_last_frame.jpg
+debug_last_roi.jpg
+*.log
+
+# Docker / database lokal
+pgdata/
+postgres_data/
+docker-compose.yml
+run.bat
+.git/
+.gitignore

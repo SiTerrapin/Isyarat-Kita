@@ -24,10 +24,16 @@
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",
+        "VIBRATE",
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.VIBRATE",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.isyaratkita"
     },
     "web": {
       "bundler": "metro",
@@ -45,9 +51,10 @@
         }
       ],
       [
-        "expo-camera",
+        "react-native-vision-camera",
         {
-          "cameraPermission": "Izinkan Isyarat Kita mengakses kamera untuk menerjemahkan bahasa isyarat BISINDO."
+          "cameraPermissionText": "Isyarat Kita membutuhkan akses kamera untuk menerjemahkan bahasa isyarat BISINDO secara real-time.",
+          "enableMicrophonePermission": false
         }
       ],
       [
@@ -67,6 +74,16 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "d309382d-f657-4c3a-baca-1e5707dc2275"
+      }
     }
   }
 }

@@ -21,45 +21,97 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   Text,
+  Vibration,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
-import { AlertSeverity, api, SoundCategory } from "@/services/api";
+import {
+  AlertSeverity,
+  api,
+  SoundCategory,
+  SoundSeverity,
+} from "@/services/api";
 
 const METERING_RECORDING_OPTIONS = {
-  ...RecordingPresets.HIGH_QUALITY,
+  ...RecordingPresets.LOW_QUALITY,
   isMeteringEnabled: true,
 };
 
-type MicGainLevel = "low" | "normal" | "high";
-const MIC_GAIN_OFFSETS: Record<MicGainLevel, { label: string; offsetDb: number }> = {
-  low: { label: "Rendah (-10)", offsetDb: -10 },
-  normal: { label: "Normal (0)", offsetDb: 0 },
-  high: { label: "Tinggi (+12)", offsetDb: 12 },
+// Trigger cepat tanggap untuk klakson singkat 1x ("bim!")
+const MOVING_AVG_WINDOW = 2; // smoothing ringan 2 sampel (~150-200ms)
+const SHORT_CLIP_CAPTURE_MS = 1000; // rekaman singkat 1.0 detik saja
+const ALERT_COOLDOWN_MS = 3000; // cooldown 3 detik setelah alert muncul
+
+type SensitivityPreset = {
+  key: "tenang" | "normal" | "ramai";
+  label: string;
+  desc: string;
+  thresholdDb: number;
 };
 
-const PATTERN_EMOJI: Record<SoundCategory, string> = {
-  klakson: "🚗",
-  sirine: "🚑",
-  alarm: "🔔",
-  teriakan: "📢",
-  ketukan: "🚪",
-  bising: "🔊",
-  tenang: "🤫",
+const SENSITIVITY_MODES: SensitivityPreset[] = [
+  { key: "tenang", label: "Tenang", desc: "62 dB", thresholdDb: 62 },
+  { key: "normal", label: "Normal", desc: "75 dB", thresholdDb: 75 },
+  { key: "ramai", label: "Ramai", desc: "85 dB", thresholdDb: 85 },
+];
+
+const CATEGORY_EMOJI: Record<SoundCategory, string> = {
+  emergency: "🚨",
+  traffic: "🚗",
+  danger: "⚠️",
+  home: "🔔",
+  none: "🤫",
 };
 
-function dbfsToResponsiveDb(dbfs: number | undefined, gainOffset: number): number {
+interface ActiveAlertState {
+  category: SoundCategory;
+  labelId: string;
+  severity: SoundSeverity;
+  decibel: number;
+}
+
+function dbfsToResponsiveDb(dbfs: number | undefined): number {
   if (typeof dbfs !== "number" || Number.isNaN(dbfs)) return 0;
-  // Kalibrasi responsif untuk mikrofon Android/iOS:
-  // -65 dBFS (sunyi) -> ~0 dB, -35 dBFS (percakapan) -> ~55 dB, -12 dBFS (keras) -> ~88 dB, 0 dBFS -> 100 dB
   const clamped = Math.max(-70, Math.min(0, dbfs));
-  const raw = ((clamped + 70) / 70) * 100 + gainOffset;
-  return Math.max(0, Math.min(100, Math.round(raw)));
+  return Math.max(0, Math.min(100, Math.round(((clamped + 70) / 70) * 100)));
+}
+
+function startEmergencyVibration(
+  category: SoundCategory,
+  severity: SoundSeverity
+) {
+  Vibration.cancel();
+  const isHigh =
+    category === "emergency" || category === "danger" || severity === "high";
+
+  if (Platform.OS === "android") {
+    // Pola getar motor asli Android (pasti terasa kuat meski Touch Haptics HP mati)
+    if (isHigh) {
+      // [tunggu 0ms, getar 500ms, jeda 200ms, getar 500ms, jeda 200ms, getar 700ms] berulang
+      Vibration.vibrate([0, 500, 200, 500, 200, 700], true);
+    } else {
+      // Getar 2x jelas untuk panggilan rumah (bel/ketukan)
+      Vibration.vibrate([0, 300, 180, 300], false);
+    }
+  } else {
+    // iOS: kombinasikan Vibration + Haptics
+    Vibration.vibrate(isHigh ? [400, 400] : 300, isHigh);
+  }
+
+  // Tambahan haptic feedback
+  if (isHigh) {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
+      () => {}
+    );
+  } else {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+  }
 }
 
 export default function SoundAlertScreen() {
@@ -75,149 +127,184 @@ export default function SoundAlertScreen() {
   } = useApp();
 
   const audioRecorder = useAudioRecorder(METERING_RECORDING_OPTIONS);
-  const recorderState = useAudioRecorderState(audioRecorder, 150);
+  const recorderState = useAudioRecorderState(audioRecorder, 100);
 
   const [isMonitoring, setIsMonitoring] = useState(false);
-  const [micGain, setMicGain] = useState<MicGainLevel>("normal");
-  const [currentDb, setCurrentDb] = useState(0);
-  const [peakDb, setPeakDb] = useState(0);
-  const [activeAlert, setActiveAlert] = useState<AlertSeverity | null>(null);
-  const [detectedLabel, setDetectedLabel] = useState<string>(
-    "Suara Keras Terdeteksi"
-  );
-  const [detectedCategory, setDetectedCategory] =
-    useState<SoundCategory>("bising");
+  const [smoothedDb, setSmoothedDb] = useState(0);
+  const [activeAlert, setActiveAlert] = useState<ActiveAlertState | null>(null);
   const [isAnalyzingPattern, setIsAnalyzingPattern] = useState(false);
   const [flashOn, setFlashOn] = useState(false);
 
   const isMonitoringRef = useRef(false);
   const analyzingRef = useRef(false);
-  const lastAnalyzeTsRef = useRef<number>(0);
+  const dbWindowRef = useRef<number[]>([]);
+  const clipStartTsRef = useRef<number>(0);
+  const cooldownUntilRef = useRef<number>(0);
+
   const threshold = settings.alert_threshold_db || 75;
 
   useEffect(() => {
     isMonitoringRef.current = isMonitoring;
   }, [isMonitoring]);
 
+  const dismissAlert = useCallback(() => {
+    Vibration.cancel();
+    setActiveAlert(null);
+  }, []);
+
   const restartMonitoringStream = useCallback(async () => {
     if (!isMonitoringRef.current) return;
     try {
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
+      clipStartTsRef.current = Date.now();
     } catch {
       // Abaikan jika user sudah menghentikan pemantauan
     }
   }, [audioRecorder]);
 
-  const analyzeAndRecordPattern = useCallback(
-    async (dbValue: number, fallbackSeverity: AlertSeverity) => {
+  const analyzeTriggeredSound = useCallback(
+    async (dbValue: number) => {
       const now = Date.now();
-      if (analyzingRef.current || now - lastAnalyzeTsRef.current < 4500) {
+      if (analyzingRef.current || now < cooldownUntilRef.current) {
         return;
       }
+
       analyzingRef.current = true;
-      lastAnalyzeTsRef.current = now;
       setIsAnalyzingPattern(true);
 
-      let finalSoundType =
-        fallbackSeverity === "danger"
-          ? "Suara Sangat Keras / Darurat"
-          : "Suara Keras Lingkungan";
-      let finalSeverity: AlertSeverity = fallbackSeverity;
-      let finalCategory: SoundCategory = "bising";
-
       try {
+        // Pastikan klip singkat ~1.0 detik sudah terekam sebelum dikirim
+        const elapsedClip = Date.now() - clipStartTsRef.current;
+        if (elapsedClip < SHORT_CLIP_CAPTURE_MS) {
+          await new Promise((r) =>
+            setTimeout(r, Math.min(450, SHORT_CLIP_CAPTURE_MS - elapsedClip))
+          );
+        }
+
         if (audioRecorder.isRecording) {
           await audioRecorder.stop();
         }
         const clipUri = audioRecorder.uri;
-        // Langsung mulai rekam lagi agar pemantauan nyaris tanpa jeda
         await restartMonitoringStream();
 
-        if (clipUri) {
-          const pattern = await api.detectSoundPattern(serverUrl, clipUri);
-          if (pattern && pattern.sound_type) {
-            finalSoundType = pattern.sound_type;
-            finalSeverity = pattern.severity;
-            finalCategory = pattern.category;
-          }
+        if (!clipUri) return;
+
+        const res = await api.detectSoundPattern(serverUrl, clipUri);
+
+        // Abaikan jika backend mendeteksi gesekan mic / angin / bukan alert
+        if (!res.is_alert) {
+          return;
         }
+
+        cooldownUntilRef.current = Date.now() + ALERT_COOLDOWN_MS;
+        setActiveAlert({
+          category: res.category,
+          labelId: res.label_id,
+          severity: res.severity,
+          decibel: Math.max(dbValue, Math.round(res.decibel_level)),
+        });
+
+        const dbSeverity: AlertSeverity =
+          res.severity === "high" ? "danger" : "warning";
+        recordSoundAlert({
+          sound_type: res.label_id,
+          decibel_level: dbValue,
+          severity: dbSeverity,
+        });
       } catch {
-        // Fallback offline bila server tidak terjangkau
         await restartMonitoringStream();
+        cooldownUntilRef.current = Date.now() + ALERT_COOLDOWN_MS;
+        const sev: SoundSeverity = dbValue >= threshold + 12 ? "high" : "medium";
+        setActiveAlert({
+          category: "danger",
+          labelId: "Suara Keras Terdeteksi",
+          severity: sev,
+          decibel: dbValue,
+        });
+        recordSoundAlert({
+          sound_type: "Suara Keras Terdeteksi",
+          decibel_level: dbValue,
+          severity: sev === "high" ? "danger" : "warning",
+        });
       } finally {
-        setDetectedLabel(finalSoundType);
-        setDetectedCategory(finalCategory);
-        setActiveAlert(finalSeverity);
         setIsAnalyzingPattern(false);
         analyzingRef.current = false;
-
-        recordSoundAlert({
-          sound_type: finalSoundType,
-          decibel_level: dbValue,
-          severity: finalSeverity,
-        });
       }
     },
-    [audioRecorder, restartMonitoringStream, serverUrl, recordSoundAlert]
+    [audioRecorder, restartMonitoringStream, serverUrl, threshold, recordSoundAlert]
   );
 
-  // Pantau metering real-time dengan sensitivitas terkalibrasi + Peak Hold
+  // Trigger cepat tanggap: smoothing ringan 2 sampel (~150-200ms) tanpa syarat sustain 0.8s
   useEffect(() => {
     if (!isMonitoring || !recorderState.isRecording) return;
 
-    const db = dbfsToResponsiveDb(
-      recorderState.metering,
-      MIC_GAIN_OFFSETS[micGain].offsetDb
-    );
-    setCurrentDb(db);
-    setPeakDb((prev) => (db > prev ? db : Math.max(db, prev - 2)));
+    const rawDb = dbfsToResponsiveDb(recorderState.metering);
+    const win = dbWindowRef.current;
+    win.push(rawDb);
+    if (win.length > MOVING_AVG_WINDOW) {
+      win.shift();
+    }
+    const avgDb = Math.round(win.reduce((a, b) => a + b, 0) / win.length);
+    setSmoothedDb(avgDb);
 
-    if (db >= threshold) {
-      const severity: AlertSeverity =
-        db >= threshold + 12 ? "danger" : "warning";
-      setActiveAlert(severity);
-      analyzeAndRecordPattern(db, severity);
+    const now = Date.now();
+    if (avgDb >= threshold && now >= cooldownUntilRef.current) {
+      analyzeTriggeredSound(avgDb);
+      return;
+    }
+
+    // Rotasi buffer rekaman tiap ~1.6 detik saat tenang agar file upload selalu ringan (~1 detik)
+    if (
+      !analyzingRef.current &&
+      clipStartTsRef.current > 0 &&
+      now - clipStartTsRef.current >= 1600
+    ) {
+      clipStartTsRef.current = now;
+      audioRecorder
+        .stop()
+        .then(() => restartMonitoringStream())
+        .catch(() => {});
     }
   }, [
     isMonitoring,
     recorderState.isRecording,
     recorderState.metering,
-    micGain,
     threshold,
-    analyzeAndRecordPattern,
+    audioRecorder,
+    restartMonitoringStream,
+    analyzeTriggeredSound,
   ]);
 
-  // Efek berkedip kontras tinggi & getaran berpola saat peringatan aktif
+  // Efek layar berkedip + getaran motor HP kuat saat alert aktif
   useEffect(() => {
     if (!activeAlert) {
+      Vibration.cancel();
       setFlashOn(false);
       return;
     }
 
+    if (settings.haptic_enabled) {
+      startEmergencyVibration(activeAlert.category, activeAlert.severity);
+    }
+
     const flashInterval = setInterval(() => {
       setFlashOn((prev) => !prev);
-      if (settings.haptic_enabled) {
-        if (activeAlert === "danger") {
-          Haptics.notificationAsync(
-            Haptics.NotificationFeedbackType.Error
-          ).catch(() => {});
-        } else {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(
-            () => {}
-          );
-        }
-      }
     }, 450);
 
-    return () => clearInterval(flashInterval);
+    return () => {
+      clearInterval(flashInterval);
+      Vibration.cancel();
+    };
   }, [activeAlert, settings.haptic_enabled]);
 
   const stopMonitoring = useCallback(async () => {
     setIsMonitoring(false);
     isMonitoringRef.current = false;
-    setCurrentDb(0);
-    setPeakDb(0);
+    dbWindowRef.current = [];
+    clipStartTsRef.current = 0;
+    setSmoothedDb(0);
+    Vibration.cancel();
     setActiveAlert(null);
 
     try {
@@ -235,6 +322,7 @@ export default function SoundAlertScreen() {
 
   useEffect(() => {
     return () => {
+      Vibration.cancel();
       try {
         if (audioRecorder.isRecording) {
           audioRecorder.stop().catch(() => {});
@@ -251,7 +339,7 @@ export default function SoundAlertScreen() {
       if (!perm.granted) {
         Alert.alert(
           "Izin Mikrofon Ditolak",
-          "Izinkan akses mikrofon agar Isyarat Kita dapat memantau suara darurat di sekitar Anda."
+          "Izinkan akses mikrofon agar Isyarat Kita dapat memantau suara darurat."
         );
         return;
       }
@@ -261,8 +349,10 @@ export default function SoundAlertScreen() {
         playsInSilentMode: true,
       });
 
+      dbWindowRef.current = [];
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
+      clipStartTsRef.current = Date.now();
       setIsMonitoring(true);
       isMonitoringRef.current = true;
     } catch (err: any) {
@@ -275,12 +365,12 @@ export default function SoundAlertScreen() {
   };
 
   const adjustThreshold = (delta: number) => {
-    const next = Math.max(40, Math.min(95, threshold + delta));
+    const next = Math.max(45, Math.min(95, threshold + delta));
     saveSettings({ alert_threshold_db: next });
   };
 
   const screenBgClass = activeAlert
-    ? activeAlert === "danger"
+    ? activeAlert.severity === "high"
       ? flashOn
         ? "bg-rose-600"
         : "bg-slate-950"
@@ -315,44 +405,33 @@ export default function SoundAlertScreen() {
                 : "text-slate-600 dark:text-slate-400"
             }`}
           >
-            Deteksi otomatis klakson, sirine, alarm, teriakan, & ketukan keras.
+            Anti-false alarm 3 lapis • Klakson, Sirine, Alarm, Teriakan & Bel Pintu.
           </Text>
         </View>
 
-        {/* Banner Peringatan Kontras Tinggi + Pola Suara */}
+        {/* Banner Peringatan Kontras Tinggi */}
         {activeAlert && (
           <View className="mb-5 items-center rounded-3xl border-4 border-white bg-black/80 p-6">
             <ShieldAlert size={52} color="#FFFFFF" />
-            <Text className="mt-2 text-center text-2xl font-black tracking-wide text-white">
-              PERINGATAN: SUARA KERAS TERDETEKSI!
+            <Text className="mt-2 text-center text-3xl font-black tracking-wide text-white">
+              {CATEGORY_EMOJI[activeAlert.category]} {activeAlert.labelId}
             </Text>
 
-            <View className="mt-3 flex-row items-center rounded-2xl bg-white/15 px-4 py-2">
-              {isAnalyzingPattern ? (
-                <>
-                  <ActivityIndicator color="#FDE047" size="small" />
-                  <Text className="ml-2 text-sm font-extrabold text-amber-300">
-                    Menganalisis pola suara...
-                  </Text>
-                </>
-              ) : (
-                <Text className="text-base font-extrabold text-amber-300">
-                  {PATTERN_EMOJI[detectedCategory]} {detectedLabel}
-                </Text>
-              )}
-            </View>
-
-            <Text className="mt-2 text-base font-bold text-white/90">
-              Level: {Math.max(currentDb, peakDb)} dB (
-              {activeAlert === "danger" ? "BAHAYA" : "WASPADA"})
+            <Text className="mt-2.5 text-base font-bold text-amber-300">
+              Level: {activeAlert.decibel} dB • Prioritas:{" "}
+              {activeAlert.severity === "high"
+                ? "TINGGI"
+                : activeAlert.severity === "medium"
+                ? "SEDANG"
+                : "RENDAH"}
             </Text>
 
             <Pressable
-              onPress={() => setActiveAlert(null)}
+              onPress={dismissAlert}
               className="mt-5 w-full items-center rounded-2xl bg-white py-4 active:bg-slate-200"
             >
               <Text className="text-lg font-extrabold text-slate-950">
-                Saya Mengerti (Matikan Kilatan)
+                Saya Mengerti (Matikan Getar & Kilatan)
               </Text>
             </Pressable>
           </View>
@@ -367,11 +446,6 @@ export default function SoundAlertScreen() {
                 ? "bg-rose-600 active:bg-rose-700"
                 : "bg-teal-600 active:bg-teal-700"
             }`}
-            accessibilityLabel={
-              isMonitoring
-                ? "Hentikan pemantauan suara"
-                : "Mulai pemantauan suara"
-            }
           >
             {isMonitoring ? (
               <Square size={44} color="#FFFFFF" fill="#FFFFFF" />
@@ -383,27 +457,29 @@ export default function SoundAlertScreen() {
             </Text>
           </Pressable>
 
-          {/* Visualisasi Meteran dB Real-Time + Peak Hold */}
+          {/* Meteran dB (Smoothed 4-sample Moving Average) */}
           <View className="mt-6 w-full">
             <View className="mb-2 flex-row items-end justify-between">
               <View>
                 <Text className="text-sm font-bold text-slate-600 dark:text-slate-300">
-                  Level Suara Real-Time
+                  Level Suara (Smoothed)
                 </Text>
                 <Text className="text-xs font-semibold text-slate-400">
-                  Puncak (Peak): {peakDb} dB
+                  {isAnalyzingPattern
+                    ? "Menganalisis pola suara (<0.5d)..."
+                    : "Mode cepat tanggap aktif (klakson 1x)"}
                 </Text>
               </View>
               <Text
                 className={`text-4xl font-black ${
-                  currentDb >= threshold
+                  smoothedDb >= threshold
                     ? "text-rose-600"
-                    : currentDb >= threshold - 15
+                    : smoothedDb >= threshold - 15
                     ? "text-amber-500"
                     : "text-teal-600 dark:text-teal-400"
                 }`}
               >
-                {currentDb}{" "}
+                {smoothedDb}{" "}
                 <Text className="text-base font-bold text-slate-500 dark:text-slate-400">
                   dB
                 </Text>
@@ -412,141 +488,121 @@ export default function SoundAlertScreen() {
 
             <View className="h-5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
               <View
-                style={{ width: `${Math.min(100, Math.max(2, currentDb))}%` }}
+                style={{ width: `${Math.min(100, Math.max(2, smoothedDb))}%` }}
                 className={`h-full rounded-full ${
-                  currentDb >= threshold
+                  smoothedDb >= threshold
                     ? "bg-rose-600"
-                    : currentDb >= threshold - 15
+                    : smoothedDb >= threshold - 15
                     ? "bg-amber-500"
                     : "bg-teal-600"
                 }`}
               />
             </View>
 
-            <View className="mt-1.5 flex-row justify-between">
-              <Text className="text-xs font-semibold text-slate-400">
-                0 dB (Sunyi)
-              </Text>
-              <Text className="text-xs font-bold text-teal-700 dark:text-teal-400">
-                Ambang: {threshold} dB
-              </Text>
-              <Text className="text-xs font-semibold text-slate-400">
-                100 dB (Keras)
-              </Text>
-            </View>
+            {isAnalyzingPattern && (
+              <View className="mt-2.5 flex-row items-center justify-center">
+                <ActivityIndicator color="#0D9488" size="small" />
+                <Text className="ml-2 text-xs font-bold text-teal-700 dark:text-teal-400">
+                  Mengidentifikasi jenis suara di server AI...
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
-        {/* Kalibrasi Sensitivitas Mikrofon & Ambang Batas */}
+        {/* 3 Mode Sensitivitas Cepat: Tenang / Normal / Ramai */}
         <View className="mb-5 rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-          <View className="mb-3 flex-row items-center">
-            <Radio size={18} color={isDark ? "#2DD4BF" : "#0D9488"} />
-            <Text className="ml-2 text-base font-bold text-slate-900 dark:text-white">
-              Sensitivitas Mikrofon & Ambang Batas
-            </Text>
+          <View className="mb-3 flex-row items-center justify-between">
+            <View className="flex-row items-center">
+              <Radio size={18} color={isDark ? "#2DD4BF" : "#0D9488"} />
+              <Text className="ml-2 text-base font-bold text-slate-900 dark:text-white">
+                Mode Lingkungan & Sensitivitas
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                Vibration.vibrate([0, 350, 150, 350], false);
+              }}
+              className="rounded-xl bg-teal-50 px-3 py-1.5 active:bg-teal-100 dark:bg-teal-950"
+            >
+              <Text className="text-xs font-bold text-teal-700 dark:text-teal-300">
+                Tes Getar
+              </Text>
+            </Pressable>
           </View>
 
-          <Text className="mb-2 text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
-            Penguatan Mikrofon (Mic Gain)
-          </Text>
           <View className="mb-4 flex-row gap-2">
-            {(["low", "normal", "high"] as MicGainLevel[]).map((lvl) => {
-              const active = micGain === lvl;
+            {SENSITIVITY_MODES.map((m) => {
+              const active = threshold === m.thresholdDb;
               return (
                 <Pressable
-                  key={lvl}
-                  onPress={() => setMicGain(lvl)}
-                  className={`flex-1 items-center rounded-xl border py-2.5 ${
+                  key={m.key}
+                  onPress={() => saveSettings({ alert_threshold_db: m.thresholdDb })}
+                  className={`flex-1 items-center rounded-2xl border py-3 ${
                     active
                       ? "border-teal-600 bg-teal-600"
                       : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800"
                   }`}
                 >
                   <Text
-                    className={`text-xs font-bold ${
-                      active
-                        ? "text-white"
-                        : "text-slate-700 dark:text-slate-200"
+                    className={`text-sm font-extrabold ${
+                      active ? "text-white" : "text-slate-800 dark:text-white"
                     }`}
                   >
-                    {MIC_GAIN_OFFSETS[lvl].label}
+                    {m.label}
+                  </Text>
+                  <Text
+                    className={`mt-0.5 text-[11px] font-semibold ${
+                      active
+                        ? "text-teal-100"
+                        : "text-slate-500 dark:text-slate-400"
+                    }`}
+                  >
+                    {m.desc}
                   </Text>
                 </Pressable>
               );
             })}
           </View>
 
-          <Text className="mb-2 text-xs font-bold uppercase text-slate-500 dark:text-slate-400">
-            Ambang Peringatan ({threshold} dB)
-          </Text>
           <View className="flex-row items-center justify-between gap-3">
             <Pressable
-              onPress={() => adjustThreshold(-5)}
-              className="h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 active:bg-slate-200 dark:border-slate-700 dark:bg-slate-800"
+              onPress={() => adjustThreshold(-3)}
+              className="h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 active:bg-slate-200 dark:border-slate-700 dark:bg-slate-800"
             >
-              <Minus size={22} color={isDark ? "#F8FAFC" : "#0F172A"} />
+              <Minus size={20} color={isDark ? "#F8FAFC" : "#0F172A"} />
             </Pressable>
 
-            <View className="flex-1 items-center rounded-2xl bg-slate-100 py-3 dark:bg-slate-800">
-              <Text className="text-2xl font-extrabold text-teal-700 dark:text-teal-400">
-                {threshold} dB
+            <View className="flex-1 items-center rounded-2xl bg-slate-100 py-2.5 dark:bg-slate-800">
+              <Text className="text-lg font-extrabold text-teal-700 dark:text-teal-400">
+                Ambang: {threshold} dB
               </Text>
             </View>
 
             <Pressable
-              onPress={() => adjustThreshold(5)}
-              className="h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 active:bg-slate-200 dark:border-slate-700 dark:bg-slate-800"
+              onPress={() => adjustThreshold(3)}
+              className="h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 active:bg-slate-200 dark:border-slate-700 dark:bg-slate-800"
             >
-              <Plus size={22} color={isDark ? "#F8FAFC" : "#0F172A"} />
+              <Plus size={20} color={isDark ? "#F8FAFC" : "#0F172A"} />
             </Pressable>
-          </View>
-
-          <View className="mt-3 flex-row gap-2">
-            {[60, 75, 85].map((preset) => (
-              <Pressable
-                key={preset}
-                onPress={() => saveSettings({ alert_threshold_db: preset })}
-                className={`flex-1 items-center rounded-xl border py-2 ${
-                  threshold === preset
-                    ? "border-teal-600 bg-teal-50 dark:bg-teal-950"
-                    : "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800"
-                }`}
-              >
-                <Text
-                  className={`text-xs font-bold ${
-                    threshold === preset
-                      ? "text-teal-700 dark:text-teal-300"
-                      : "text-slate-600 dark:text-slate-300"
-                  }`}
-                >
-                  {preset === 60
-                    ? "Sensitif (60)"
-                    : preset === 75
-                    ? "Standar (75)"
-                    : "Bising (85)"}
-                </Text>
-              </Pressable>
-            ))}
           </View>
         </View>
 
         {/* Log Peringatan Suara */}
-        <View className="mb-3 flex-row items-center justify-between">
-          <View className="flex-row items-center">
-            <BellRing
-              size={18}
-              color={isAlertBannerActive ? "#FFFFFF" : "#E11D48"}
-            />
-            <Text
-              className={`ml-2 text-base font-bold ${
-                isAlertBannerActive
-                  ? "text-white"
-                  : "text-slate-800 dark:text-white"
-              }`}
-            >
-              Log Peringatan Suara
-            </Text>
-          </View>
+        <View className="mb-3 flex-row items-center">
+          <BellRing
+            size={18}
+            color={isAlertBannerActive ? "#FFFFFF" : "#E11D48"}
+          />
+          <Text
+            className={`ml-2 text-base font-bold ${
+              isAlertBannerActive
+                ? "text-white"
+                : "text-slate-800 dark:text-white"
+            }`}
+          >
+            Log Peringatan Suara
+          </Text>
         </View>
 
         {recentAlerts.length === 0 ? (
