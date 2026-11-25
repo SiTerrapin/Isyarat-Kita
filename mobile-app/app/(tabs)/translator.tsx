@@ -4,11 +4,18 @@ import {
   setAudioModeAsync,
   useAudioRecorder,
 } from "expo-audio";
-import { CameraType, CameraView, useCameraPermissions } from "expo-camera";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect } from "expo-router";
 import {
+  Camera as VisionCamera,
+  useCameraDevice,
+  useCameraFormat,
+  useCameraPermission,
+} from "react-native-vision-camera";
+import {
   BookmarkPlus,
+  Bot,
   Camera,
   CornerDownLeft,
   Delete,
@@ -30,11 +37,14 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
+  AppStateStatus,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
@@ -43,30 +53,19 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
 import { useTTS } from "@/hooks/useTTS";
-import { api, TTS_VOICE_CHOICES, TTSVoiceOption } from "@/services/api";
+import {
+  api,
+  TTS_VOICE_CHOICES,
+  TTSVoiceOption,
+} from "@/services/api";
 
-const STABILITY_THRESHOLD = 2;
-const AUTO_SPACE_EMPTY_CYCLES = 3;
-const CAPTURE_LOOP_DELAY_MS = 650;
+const STABILITY_THRESHOLD = 3;
+const MIN_CONFIDENCE = 0.55;
+const INSTANT_LOCK_CONFIDENCE = 0.88;
+const AUTO_SPACE_EMPTY_CYCLES = 5;
+const SNAPSHOT_INTERVAL_MS = 350;
 
-const StableCameraPreview = React.memo(function StableCameraPreview({
-  cameraRef,
-  facing,
-}: {
-  cameraRef: React.RefObject<CameraView | null>;
-  facing: CameraType;
-}) {
-  return (
-    <CameraView
-      ref={cameraRef}
-      style={{ flex: 1 }}
-      facing={facing}
-      animateShutter={false}
-      flash="off"
-      enableTorch={false}
-    />
-  );
-});
+type CameraFacing = "front" | "back";
 
 type ChatRole = "deaf" | "hearing";
 
@@ -104,13 +103,27 @@ export default function TranslatorScreen() {
     isSpeaking,
   } = useTTS();
 
+  const [isFocused, setIsFocused] = useState(true);
+  const [appState, setAppState] = useState<AppStateStatus>(
+    (AppState.currentState as AppStateStatus) || "active"
+  );
+
   useFocusEffect(
     useCallback(() => {
+      setIsFocused(true);
       return () => {
+        setIsFocused(false);
         stopAllSpeech();
       };
     }, [stopAllSpeech])
   );
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState) => {
+      setAppState(nextState);
+    });
+    return () => sub.remove();
+  }, []);
 
   const speakText = useCallback(
     (
@@ -128,12 +141,19 @@ export default function TranslatorScreen() {
   );
 
   // ==========================================
-  // MODE 1: ISYARAT -> SUARA & TEKS
+  // MODE 1: ISYARAT -> SUARA & TEKS (Native react-native-vision-camera)
   // ==========================================
-  const [permission, requestPermission] = useCameraPermissions();
-  const [facing, setFacing] = useState<CameraType>("front");
-  const [isDetecting, setIsDetecting] = useState(false);
+  const { hasPermission, requestPermission } = useCameraPermission();
+  const [facing, setFacing] = useState<CameraFacing>("front");
+  const device = useCameraDevice(facing);
+  const format = useCameraFormat(device, [
+    { videoResolution: { width: 640, height: 480 } },
+    { fps: 30 },
+  ]);
+
+  const [isDetecting, setIsDetecting] = useState(true);
   const [handFound, setHandFound] = useState(false);
+  const [lowConfidenceHint, setLowConfidenceHint] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
   const [visionMode, setVisionMode] = useState<"mock" | "model" | null>(null);
 
@@ -144,27 +164,12 @@ export default function TranslatorScreen() {
   const [currentLetters, setCurrentLetters] = useState<string[]>([]);
   const [glossWords, setGlossWords] = useState<string[]>([]);
   const [naturalSentence, setNaturalSentence] = useState<string>("");
+  const [chatAiEnabled, setChatAiEnabled] = useState<boolean>(true);
+  const [aiReply, setAiReply] = useState<string>("");
   const [signError, setSignError] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(true);
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
 
-  const pushDebug = useCallback((msg: string, isError = false) => {
-    const ts = new Date().toLocaleTimeString("id-ID", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    const line = `[${ts}] ${msg}`;
-    if (isError) {
-      console.warn("[TRANSLATOR DEBUG]", line);
-    } else {
-      console.log("[TRANSLATOR DEBUG]", line);
-    }
-    setDebugLogs((prev) => [line, ...prev].slice(0, 12));
-  }, []);
-
-  const cameraRef = useRef<CameraView | null>(null);
-  const inFlightRef = useRef(false);
+  const cameraRef = useRef<VisionCamera | null>(null);
+  const isProcessingRef = useRef(false);
   const stableCandidateRef = useRef<{ letter: string | null; count: number; lastLocked: string | null }>({
     letter: null,
     count: 0,
@@ -173,6 +178,12 @@ export default function TranslatorScreen() {
   const emptyHandCyclesRef = useRef(0);
   const currentLettersRef = useRef<string[]>([]);
   const glossWordsRef = useRef<string[]>([]);
+
+  const isCameraActive =
+    activeTab === "sign" &&
+    isFocused &&
+    isDetecting &&
+    appState === "active";
 
   useEffect(() => {
     currentLettersRef.current = currentLetters;
@@ -209,31 +220,44 @@ export default function TranslatorScreen() {
     }
   }, [serverUrl]);
 
-  const captureAndPredict = useCallback(async () => {
-    if (!cameraRef.current || inFlightRef.current) return;
-    inFlightRef.current = true;
-    setSignError(null);
+  const captureSnapshotAndPredict = useCallback(async () => {
+    if (!cameraRef.current || isProcessingRef.current || !device) return;
+    isProcessingRef.current = true;
+    let tempFileUri: string | null = null;
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.3,
-        base64: true,
-        skipProcessing: true,
-        shutterSound: false,
+      // Ambil snapshot langsung dari GPU preview stream (tanpa shutter lag)
+      const snapshot = await cameraRef.current.takeSnapshot({ quality: 70 });
+      if (!snapshot?.path) return;
+
+      const snapshotUri = snapshot.path.startsWith("file://")
+        ? snapshot.path
+        : `file://${snapshot.path}`;
+      tempFileUri = snapshotUri;
+
+      const base64 = await FileSystem.readAsStringAsync(snapshotUri, {
+        encoding: FileSystem.EncodingType.Base64,
       });
+      if (!base64) return;
 
-      if (!photo?.base64) return;
-
-      const t0 = Date.now();
-      const res = await api.predictSignBase64(serverUrl, photo.base64);
-      const ms = Date.now() - t0;
-      setVisionMode(res.mode);
-      setHandFound(res.hand_found);
-      pushDebug(
-        `predict(${res.mode}) ${ms}ms | hand=${res.hand_found} letter=${res.letter ?? "-"} conf=${Math.round(res.confidence * 100)}%`
+      // Kamera depan di-mirror di backend agar 1:1 konsisten dengan training Google Colab
+      const res = await api.predictSignBase64(
+        serverUrl,
+        base64,
+        null,
+        facing === "front"
       );
 
-      if (!res.hand_found || !res.detected || !res.letter) {
+      setSignError(null);
+      if (res.mode === "mock" || res.mode === "model") {
+        setVisionMode(res.mode);
+      }
+
+      const handsCount = Number(res.hands_detected ?? (res.hand_found ? 1 : 0));
+      setHandFound(handsCount > 0);
+
+      if (handsCount === 0 || !res.hand_found || !res.detected || !res.letter) {
+        setLowConfidenceHint(false);
         setCandidateLetter(null);
         setCandidateConfidence(0);
         setStabilityCount(0);
@@ -252,9 +276,38 @@ export default function TranslatorScreen() {
       }
 
       emptyHandCyclesRef.current = 0;
-      const letter = res.letter.toUpperCase();
+      const confidence = Number(res.confidence || 0);
+
+      if (confidence < MIN_CONFIDENCE) {
+        setLowConfidenceHint(true);
+        setCandidateLetter(null);
+        setCandidateConfidence(confidence);
+        setStabilityCount(0);
+        stableCandidateRef.current.letter = null;
+        stableCandidateRef.current.count = 0;
+        return;
+      }
+
+      setLowConfidenceHint(false);
+      const letter = String(res.letter).toUpperCase();
       setCandidateLetter(letter);
-      setCandidateConfidence(res.confidence);
+      setCandidateConfidence(confidence);
+
+      // Kunci instan jika confidence sangat tinggi (>= 0.88), atau tunggu stabil STABILITY_THRESHOLD frame
+      if (
+        confidence >= INSTANT_LOCK_CONFIDENCE &&
+        stableCandidateRef.current.lastLocked !== letter
+      ) {
+        stableCandidateRef.current.letter = letter;
+        stableCandidateRef.current.lastLocked = letter;
+        stableCandidateRef.current.count = 0;
+        setStabilityCount(STABILITY_THRESHOLD);
+        setCurrentLetters((prev) => [...prev, letter]);
+        if (settings.haptic_enabled) {
+          Haptics.selectionAsync().catch(() => {});
+        }
+        return;
+      }
 
       if (stableCandidateRef.current.letter === letter) {
         const nextCount = stableCandidateRef.current.count + 1;
@@ -280,24 +333,31 @@ export default function TranslatorScreen() {
         setStabilityCount(1);
       }
     } catch (err: any) {
-      const msg =
-        err?.message || "Gagal menghubungi server AI. Cek URL di Pengaturan.";
-      setSignError(msg);
-      pushDebug(`ERR predict: ${msg}`, true);
-      setIsDetecting(false);
+      setHandFound(false);
+      setSignError(
+        err?.message || "Gagal menghubungi server AI. Cek URL di Pengaturan."
+      );
     } finally {
-      inFlightRef.current = false;
+      if (tempFileUri) {
+        FileSystem.deleteAsync(tempFileUri, { idempotent: true }).catch(() => {});
+      }
+      isProcessingRef.current = false;
     }
-  }, [serverUrl, commitCurrentWord, settings.haptic_enabled, pushDebug]);
+  }, [serverUrl, device, facing, commitCurrentWord, settings.haptic_enabled]);
 
-  const captureFnRef = useRef(captureAndPredict);
+  const captureFnRef = useRef(captureSnapshotAndPredict);
   useEffect(() => {
-    captureFnRef.current = captureAndPredict;
-  }, [captureAndPredict]);
+    captureFnRef.current = captureSnapshotAndPredict;
+  }, [captureSnapshotAndPredict]);
 
-  // Loop sekuensial (tunggu inferensi selesai baru jadwalkan frame berikutnya agar bebas flicker)
+  // Loop sekuensial setiap 350 ms saat kamera aktif (tunggu request selesai agar tidak menumpuk)
   useEffect(() => {
-    if (!isDetecting || activeTab !== "sign") return;
+    if (!isCameraActive || !hasPermission || !device) {
+      setHandFound(false);
+      setCandidateLetter(null);
+      setStabilityCount(0);
+      return;
+    }
     let cancelled = false;
     let timerId: ReturnType<typeof setTimeout> | null = null;
 
@@ -305,7 +365,7 @@ export default function TranslatorScreen() {
       if (cancelled) return;
       await captureFnRef.current();
       if (!cancelled) {
-        timerId = setTimeout(runLoop, CAPTURE_LOOP_DELAY_MS);
+        timerId = setTimeout(runLoop, SNAPSHOT_INTERVAL_MS);
       }
     };
 
@@ -314,13 +374,7 @@ export default function TranslatorScreen() {
       cancelled = true;
       if (timerId) clearTimeout(timerId);
     };
-  }, [isDetecting, activeTab]);
-
-  useEffect(() => {
-    if (activeTab !== "sign" && isDetecting) {
-      setIsDetecting(false);
-    }
-  }, [activeTab, isDetecting]);
+  }, [isCameraActive, hasPermission, device]);
 
   const handleBackspace = () => {
     if (currentLetters.length > 0) {
@@ -355,11 +409,18 @@ export default function TranslatorScreen() {
 
     setIsRefining(true);
     setSignError(null);
+    setAiReply("");
     try {
-      const res = await api.refineText(serverUrl, wordsToRefine);
-      setNaturalSentence(res.sentence);
-      if (!isMuted) {
-        speakText(res.sentence);
+      const res = await api.refineText(serverUrl, wordsToRefine, chatAiEnabled);
+      const sentence = res.sentence || res.refined_text || "";
+      setNaturalSentence(sentence);
+      if (chatAiEnabled && res.ai_reply) {
+        setAiReply(res.ai_reply);
+        if (!isMuted) {
+          speakText(res.ai_reply, false, "hearing");
+        }
+      } else if (!isMuted && sentence) {
+        speakText(sentence, false, "deaf");
       }
     } catch {
       const joined = wordsToRefine.join(" ").toLowerCase();
@@ -367,8 +428,8 @@ export default function TranslatorScreen() {
         ? joined[0].toUpperCase() + joined.slice(1) + "."
         : "";
       setNaturalSentence(fallback);
-      if (!isMuted) {
-        speakText(fallback);
+      if (!isMuted && fallback) {
+        speakText(fallback, false, "deaf");
       }
     } finally {
       setIsRefining(false);
@@ -380,6 +441,7 @@ export default function TranslatorScreen() {
     setCurrentLetters([]);
     setGlossWords([]);
     setNaturalSentence("");
+    setAiReply("");
     setCandidateLetter(null);
     setCandidateConfidence(0);
     setStabilityCount(0);
@@ -493,24 +555,20 @@ export default function TranslatorScreen() {
           throw new Error("File rekaman audio tidak ditemukan.");
         }
 
-        pushDebug(`STT upload: ${uri.split("/").pop()}`);
         const stt = await api.transcribeAudio(serverUrl, uri, "chat_voice.m4a");
         if (stt.text && stt.text.trim()) {
           const assignedRole = targetRole ?? chatRole;
           appendChatMessage(assignedRole, stt.text, "suara");
-          pushDebug(`STT OK (${Math.round(stt.confidence * 100)}%): ${stt.text}`);
         } else {
           const warnMsg =
             stt.warning ||
             "Suara tidak terdengar jelas, coba ulangi lebih dekat ke mikrofon.";
-          pushDebug(`STT WARN: ${warnMsg}`, true);
           Alert.alert("Suara Tidak Terdengar", warnMsg);
         }
       } catch (err: any) {
         const errMsg =
           err?.message ||
           "Pastikan server backend aktif & mikrofon terdengar jelas.";
-        pushDebug(`STT ERR: ${errMsg}`, true);
         Alert.alert("Transkripsi Suara Gagal", errMsg);
       } finally {
         setIsTranscribing(false);
@@ -548,7 +606,6 @@ export default function TranslatorScreen() {
     } catch (err: any) {
       const errMsg =
         err?.message || "Mikrofon sedang digunakan oleh aplikasi lain.";
-      pushDebug(`MIC ERR: ${errMsg}`, true);
       Alert.alert("Gagal Memulai Rekam", errMsg);
     }
   };
@@ -596,29 +653,9 @@ export default function TranslatorScreen() {
     <SafeAreaView className="flex-1 bg-slate-50 dark:bg-slate-950" edges={["top"]}>
       {/* Segmented Tab Switcher */}
       <View className="border-b border-slate-200 bg-white px-4 pb-3 pt-3 dark:border-slate-800 dark:bg-slate-900">
-        <View className="mb-2.5 flex-row items-center justify-between">
-          <Text className="text-xl font-extrabold text-slate-900 dark:text-white">
-            Translator Dua Arah
-          </Text>
-          <Pressable
-            onPress={() => setShowDebug((prev) => !prev)}
-            className={`rounded-full px-3 py-1 ${
-              showDebug
-                ? "bg-amber-100 dark:bg-amber-950"
-                : "bg-slate-100 dark:bg-slate-800"
-            }`}
-          >
-            <Text
-              className={`text-xs font-bold ${
-                showDebug
-                  ? "text-amber-800 dark:text-amber-300"
-                  : "text-slate-600 dark:text-slate-300"
-              }`}
-            >
-              Debug: {showDebug ? "ON" : "OFF"}
-            </Text>
-          </Pressable>
-        </View>
+        <Text className="mb-2.5 text-xl font-extrabold text-slate-900 dark:text-white">
+          Translator Dua Arah
+        </Text>
         <View className="flex-row rounded-2xl bg-slate-100 p-1 dark:bg-slate-800">
           <Pressable
             onPress={() => setActiveTab("sign")}
@@ -663,45 +700,53 @@ export default function TranslatorScreen() {
           className="flex-1"
           contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
         >
-          {/* Viewfinder Kamera */}
-          <View className="overflow-hidden rounded-3xl border border-slate-200 bg-slate-900">
-            {!permission ? (
-              <View className="h-72 items-center justify-center">
-                <ActivityIndicator color="#0D9488" size="large" />
-              </View>
-            ) : !permission.granted ? (
+          {/* Viewfinder Kamera Full-Frame (Border container sebagai indikator deteksi tangan) */}
+          <View
+            className="overflow-hidden rounded-3xl bg-slate-900"
+            style={{
+              borderColor:
+                isDetecting && handFound
+                  ? "#22C55E"
+                  : "rgba(255,255,255,0.2)",
+              borderWidth: isDetecting && handFound ? 3 : 2,
+            }}
+          >
+            {!hasPermission ? (
               <View className="h-72 items-center justify-center px-6">
                 <Camera size={40} color="#94A3B8" />
                 <Text className="mt-3 text-center text-base font-bold text-white">
                   Izin Kamera Diperlukan
                 </Text>
                 <Text className="mt-1 text-center text-sm text-slate-300">
-                  Aktifkan kamera untuk menerjemahkan ejaan isyarat BISINDO.
+                  Isyarat Kita membutuhkan akses kamera untuk menerjemahkan bahasa isyarat BISINDO secara real-time.
                 </Text>
                 <Pressable
                   onPress={requestPermission}
                   className="mt-4 rounded-2xl bg-teal-600 px-6 py-3 active:bg-teal-700"
                 >
                   <Text className="text-sm font-bold text-white">
-                    Izinkan Kamera
+                    Izinkan Akses Kamera
                   </Text>
                 </Pressable>
               </View>
+            ) : !device ? (
+              <View className="h-72 items-center justify-center px-6">
+                <ActivityIndicator color="#0D9488" size="large" />
+                <Text className="mt-3 text-center text-sm text-slate-300">
+                  Menyiapkan perangkat kamera...
+                </Text>
+              </View>
             ) : (
-              <View className="relative h-80 w-full">
-                <StableCameraPreview cameraRef={cameraRef} facing={facing} />
-
-                {/* Bingkai Panduan Area Tangan */}
-                <View
-                  pointerEvents="none"
-                  className="absolute inset-0 items-center justify-center"
-                >
-                  <View
-                    className={`h-52 w-56 rounded-3xl border-2 border-dashed ${
-                      handFound ? "border-emerald-400" : "border-white/50"
-                    }`}
-                  />
-                </View>
+              <View className="relative h-[320px] w-full bg-black">
+                <VisionCamera
+                  ref={cameraRef}
+                  style={StyleSheet.absoluteFill}
+                  device={device}
+                  format={format}
+                  isActive={isCameraActive}
+                  photo={true}
+                  audio={false}
+                />
 
                 {/* Top Overlay Status & Flip */}
                 <View className="absolute left-3 right-3 top-3 flex-row items-center justify-between">
@@ -715,10 +760,14 @@ export default function TranslatorScreen() {
                         {isDetecting ? "AKTIF" : "DIJEDA"}
                       </Text>
                     </View>
-                    {isDetecting && handFound && (
-                      <View className="rounded-full bg-teal-600/90 px-3 py-1.5">
-                        <Text className="text-xs font-extrabold text-white">
-                          TANGAN TERDETEKSI
+                    {isDetecting && (
+                      <View
+                        className={`rounded-full px-3 py-1.5 ${
+                          handFound ? "bg-emerald-500/90" : "bg-black/60"
+                        }`}
+                      >
+                        <Text className="text-xs font-bold text-white">
+                          {handFound ? "Tangan Terdeteksi" : "Mencari Tangan..."}
                         </Text>
                       </View>
                     )}
@@ -752,6 +801,10 @@ export default function TranslatorScreen() {
                       ? `Mendeteksi: ${candidateLetter}  [${stabilityDots}]  ${Math.round(
                           candidateConfidence * 100
                         )}%`
+                      : lowConfidenceHint && isDetecting
+                      ? `Posisikan tangan lebih jelas... (${Math.round(
+                          candidateConfidence * 100
+                        )}%)`
                       : isDetecting
                       ? "Arahkan tangan ke dalam bingkai..."
                       : "Tekan Lanjut Deteksi untuk mulai"}
@@ -771,37 +824,6 @@ export default function TranslatorScreen() {
               <Text className="text-xs font-semibold text-rose-700">
                 {signError}
               </Text>
-            </View>
-          )}
-
-          {showDebug && (
-            <View className="mt-3 rounded-2xl border border-slate-700 bg-slate-900 p-3">
-              <View className="mb-1 flex-row items-center justify-between">
-                <Text className="text-[11px] font-extrabold uppercase text-amber-400">
-                  Debug Console ({serverUrl})
-                </Text>
-                <Pressable onPress={() => setDebugLogs([])}>
-                  <Text className="text-[11px] font-bold text-slate-400">
-                    Clear
-                  </Text>
-                </Pressable>
-              </View>
-              {debugLogs.length === 0 ? (
-                <Text className="text-[11px] text-slate-400">
-                  Menunggu request dari kamera...
-                </Text>
-              ) : (
-                debugLogs.slice(0, 5).map((line, i) => (
-                  <Text
-                    key={`${i}-${line}`}
-                    className={`font-mono text-[11px] ${
-                      line.includes("ERR") ? "text-rose-400" : "text-emerald-300"
-                    }`}
-                  >
-                    {line}
-                  </Text>
-                ))
-              )}
             </View>
           )}
 
@@ -879,17 +901,116 @@ export default function TranslatorScreen() {
                   </View>
                 ) : null}
               </View>
-              <Text className="text-2xl font-extrabold text-slate-950 dark:text-white">
+              <Text className="text-m font-extrabold text-slate-950 dark:text-white">
                 {naturalSentence ||
                   "Tekan 'Rangkai & Ucapkan' untuk membuat kalimat natural."}
               </Text>
+            </View>
+
+            {/* Bubble Balasan Chat AI (Tampil jika Toggle Chat AI aktif) */}
+            {chatAiEnabled && (aiReply || isRefining) && (
+              <View className="mt-2.5 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-800 dark:bg-indigo-950/60">
+                <View className="mb-1.5 flex-row items-center justify-between">
+                  <View className="flex-row items-center gap-1.5">
+                    <Bot size={14} color="#4F46E5" />
+                    <Text className="text-xs font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
+                      Balasan AI
+                    </Text>
+                  </View>
+                  {aiReply ? (
+                    <View className="flex-row gap-2">
+                      <Pressable
+                        onPress={() =>
+                          isSpeaking
+                            ? stopAllSpeech()
+                            : speakText(aiReply, true, "hearing")
+                        }
+                        className="flex-row items-center rounded-lg bg-indigo-600 px-2.5 py-1.5 active:bg-indigo-700"
+                      >
+                        {isSpeaking ? (
+                          <Pause size={13} color="#FFFFFF" />
+                        ) : (
+                          <Play size={13} color="#FFFFFF" />
+                        )}
+                        <Text className="ml-1 text-xs font-bold text-white">
+                          {isSpeaking ? "Pause" : "Putar Suara"}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => setFullscreenText(aiReply)}
+                        className="flex-row items-center rounded-lg bg-indigo-100 px-2.5 py-1.5 active:bg-indigo-200 dark:bg-indigo-900"
+                      >
+                        <Maximize2 size={13} color="#3730A3" />
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
+                {isRefining && !aiReply ? (
+                  <View className="flex-row items-center gap-2 py-1">
+                    <ActivityIndicator size="small" color="#4F46E5" />
+                    <Text className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                      AI sedang membalas...
+                    </Text>
+                  </View>
+                ) : (
+                  <Text className="text-sm font-bold leading-5 text-indigo-950 dark:text-indigo-100">
+                    {aiReply}
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {/* Toggle Chat AI (ON/OFF) */}
+            <View className="mt-3 flex-row items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 dark:border-slate-700 dark:bg-slate-800">
+              <View className="flex-1 flex-row items-center gap-2 pr-2">
+                <Bot
+                  size={17}
+                  color={chatAiEnabled ? "#4F46E5" : "#64748B"}
+                />
+                <View className="flex-1">
+                  <Text className="text-xs font-extrabold text-slate-900 dark:text-white">
+                    Chat AI (Obrolan Dua Arah)
+                  </Text>
+                  <Text className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {chatAiEnabled
+                      ? "AI otomatis membalas kalimat BISINDO Anda"
+                      : "Hanya terjemahan kalimat (lebih cepat & hemat)"}
+                  </Text>
+                </View>
+              </View>
+              <Pressable
+                onPress={() => {
+                  setChatAiEnabled((prev) => {
+                    const next = !prev;
+                    if (!next) setAiReply("");
+                    return next;
+                  });
+                }}
+                className={`rounded-full px-3.5 py-1.5 ${
+                  chatAiEnabled
+                    ? "bg-indigo-600 active:bg-indigo-700"
+                    : "bg-slate-300 active:bg-slate-400 dark:bg-slate-700"
+                }`}
+                accessibilityRole="switch"
+                accessibilityState={{ checked: chatAiEnabled }}
+              >
+                <Text
+                  className={`text-xs font-extrabold ${
+                    chatAiEnabled
+                      ? "text-white"
+                      : "text-slate-700 dark:text-slate-200"
+                  }`}
+                >
+                  {chatAiEnabled ? "ON" : "OFF"}
+                </Text>
+              </Pressable>
             </View>
 
             {/* Baris Kontrol Utama */}
             <View className="mt-3.5 flex-row gap-2">
               <Pressable
                 onPress={() => setIsDetecting((prev) => !prev)}
-                disabled={!permission?.granted}
+                disabled={!hasPermission || !device}
                 className={`flex-1 flex-row items-center justify-center rounded-2xl py-3.5 ${
                   isDetecting
                     ? "bg-amber-500 active:bg-amber-600"

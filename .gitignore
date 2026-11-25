@@ -20,6 +20,7 @@ backend/models/*.onnx
 backend/models/*.h5
 backend/models/*.tflite
 backend/models/*.task
+backend/debug_last_*.jpg
 
 # Node / Expo Mobile App
 node_modules/

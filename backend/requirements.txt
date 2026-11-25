@@ -22,7 +22,8 @@ python-multipart>=0.0.12
 Pillow>=11.0.0
 numpy>=1.26.0
 
-# NLP BISINDO (Koreksi Kata & Perangkai Kalimat Ringan)
+# NLP BISINDO (Hybrid Gemini API + Koreksi Kata Lokal)
+google-genai>=1.0.0
 rapidfuzz>=3.9.0
 Sastrawi>=1.0.1
 

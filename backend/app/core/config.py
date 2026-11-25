@@ -23,11 +23,12 @@ class Settings(BaseSettings):
     # STT (faster-whisper)
     STT_MODEL_SIZE: str = "tiny"
 
-    # Opsional: hook LLM untuk /api/refine-text
+    # Hybrid NLP (Gemini API)
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     LLM_API_URL: str | None = None
     LLM_API_KEY: str | None = None
     LLM_MODEL: str | None = None
-    GEMINI_API_KEY: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),

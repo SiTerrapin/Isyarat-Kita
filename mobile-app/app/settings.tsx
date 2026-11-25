@@ -29,7 +29,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ThemeMode, useApp } from "@/context/AppContext";
 import { useTTS } from "@/hooks/useTTS";
-import { TTS_VOICE_CHOICES, TTSVoiceOption } from "@/services/api";
+import {
+  normalizeBaseUrl,
+  TTS_VOICE_CHOICES,
+  TTSVoiceOption,
+} from "@/services/api";
 
 const SPEECH_RATES = [
   { label: "Lambat (0.75x)", value: 0.75 },
@@ -105,16 +109,19 @@ export default function SettingsModalScreen() {
   };
 
   const handleTestConnection = async () => {
-    if (!urlInput.trim().startsWith("http")) {
+    const cleanedUrl = normalizeBaseUrl(urlInput);
+    if (!/^https?:\/\//i.test(cleanedUrl)) {
       Alert.alert(
         "URL Tidak Valid",
-        "Masukkan URL lengkap diawali http:// atau https:// (contoh: http://192.168.1.6:8000)."
+        "Masukkan URL lengkap diawali http:// atau https:// (contoh: https://xxx.trycloudflare.com)."
       );
       return;
     }
+    setUrlInput(cleanedUrl);
+    console.log(`[SETTINGS] Menyimpan & tes koneksi: ${cleanedUrl}/health`);
     setTesting(true);
     setTestResult(null);
-    const ok = await updateServerUrl(urlInput.trim());
+    const ok = await updateServerUrl(cleanedUrl);
     setTesting(false);
     setTestResult(ok ? "ok" : "fail");
   };
