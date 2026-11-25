@@ -276,6 +276,9 @@ export class ApiError extends Error {
   }
 }
 
+export const DEFAULT_API_BASE_URL = "https://isyarat-kita.onrender.com";
+export const API_BASE_URL = DEFAULT_API_BASE_URL;
+
 export function normalizeBaseUrl(url: string): string {
   return url
     .trim()
@@ -314,6 +317,7 @@ export function isLegacyDefaultUrl(url: string | null): boolean {
   const clean = normalizeBaseUrl(url).toLowerCase();
   return (
     clean === "http://192.168.1.10:8000" ||
+    clean === "http://192.168.1.6:8000" ||
     clean === "http://localhost:8000" ||
     clean === "http://127.0.0.1:8000"
   );
