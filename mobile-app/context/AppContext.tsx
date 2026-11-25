@@ -11,6 +11,7 @@ import React, {
 
 import {
   api,
+  DEFAULT_API_BASE_URL,
   detectExpoHostServerUrl,
   HealthResponse,
   isLegacyDefaultUrl,
@@ -36,7 +37,7 @@ const STORAGE_KEYS = {
 
 export type ThemeMode = "light" | "dark" | "system";
 
-const FALLBACK_SERVER_URL = "http://192.168.1.6:8000";
+const FALLBACK_SERVER_URL = DEFAULT_API_BASE_URL;
 
 const DEFAULT_SETTINGS: UserSettings = {
   alert_threshold_db: 75,
@@ -104,9 +105,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const detectedHostUrl = detectExpoHostServerUrl(8000);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [serverUrl, setServerUrlState] = useState(
-    detectedHostUrl || FALLBACK_SERVER_URL
-  );
+  const [serverUrl, setServerUrlState] = useState(FALLBACK_SERVER_URL);
   const [serverStatus, setServerStatus] = useState<ServerStatus>("checking");
   const [healthInfo, setHealthInfo] = useState<HealthResponse | null>(null);
   const [lastHealthError, setLastHealthError] = useState<string | null>(null);
@@ -208,13 +207,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setColorScheme(resolvedTheme);
         }
 
-        const autoUrl = detectExpoHostServerUrl(8000);
         const storedUrl = savedUrl[1] ? normalizeBaseUrl(savedUrl[1]) : null;
-        // Jika belum pernah menyimpan URL kustom atau masih URL default lama, pakai auto-detect Expo
+        // Gunakan URL produksi default (https://isyarat-kita.onrender.com) bila belum ada URL kustom atau masih URL lokal lama
         const resolvedUrl =
           storedUrl && !isLegacyDefaultUrl(storedUrl)
             ? storedUrl
-            : autoUrl || storedUrl || FALLBACK_SERVER_URL;
+            : FALLBACK_SERVER_URL;
         const resolvedToken = savedToken[1] || null;
         const resolvedUser: UserProfile | null = savedUserRaw[1]
           ? JSON.parse(savedUserRaw[1])
