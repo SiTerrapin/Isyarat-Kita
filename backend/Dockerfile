@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+ARG AI_MODEL_URL=""
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -10,7 +12,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/tmp/hf_cache \
     TORCH_HOME=/tmp/torch_cache \
     XDG_CACHE_HOME=/tmp/cache \
-    AI_MOCK_MODE=false
+    AI_MOCK_MODE=false \
+    AI_MODEL_URL=${AI_MODEL_URL}
 
 # System dependencies untuk OpenCV, MediaPipe, LiteRT, dan pemrosesan audio (ffmpeg)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,8 +42,9 @@ COPY --chown=user:user migrations /app/migrations
 COPY --chown=user:user seeds /app/seeds
 COPY --chown=user:user scripts /app/scripts
 
-RUN mkdir -p /tmp/hf_cache /tmp/torch_cache /tmp/cache && \
-    chown -R user:user /app /tmp/hf_cache /tmp/torch_cache /tmp/cache
+RUN mkdir -p /app/models /tmp/hf_cache /tmp/torch_cache /tmp/cache && \
+    chown -R user:user /app /tmp/hf_cache /tmp/torch_cache /tmp/cache && \
+    chmod -R u+rwX /app/models
 
 USER user
 
