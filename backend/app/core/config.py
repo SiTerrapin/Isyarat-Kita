@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 hari
 
     # AI BISINDO Vision & MediaPipe
-    AI_MOCK_MODE: bool = True
+    AI_MOCK_MODE: bool = False
     AI_MODEL_PATH: str = "models/bisindo_convnext_tiny_gated_FINAL.pth"
     HAND_LANDMARKER_PATH: str = "models/hand_landmarker.task"
     GLOSS_DATASET_PATH: str = "models/bisindo_gloss_conversation_dataset.jsonl"

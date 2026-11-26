@@ -99,4 +99,5 @@ def health_check() -> dict[str, object]:
         "database": db_status,
         "ai_mode": ai_status["ai_mode"],
         "model_loaded": ai_status["model_loaded"],
+        "load_error": ai_status.get("load_error"),
     }
