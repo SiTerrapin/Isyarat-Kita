@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 DEBUG_LAST_FRAME_PATH = BASE_DIR / "debug_last_frame.jpg"
 DEBUG_LAST_ROI_PATH = BASE_DIR / "debug_last_roi.jpg"
 MAX_INPUT_SIDE = 640
+MIN_HAND_BBOX_PX = 40
+MIN_HAND_BBOX_RATIO = 0.08
+MIN_MODEL_CONFIDENCE = 0.70
 
 HAND_LANDMARKER_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -140,23 +143,40 @@ def crop_hand_roi(
     pil_img: Image.Image,
     raw_hands_list: list[np.ndarray],
     margin: float = 0.25,
-) -> Image.Image:
-    """Square ROI crop identik 100% dengan notebook testing."""
+) -> Optional[Image.Image]:
+    """
+    Square ROI crop dari landmark MediaPipe dengan filter anti-noise background:
+    - Tolak (return None) jika bounding box tangan < 40px atau < 8% dimensi frame.
+    - Tidak pernah fallback ke full frame agar noise background tidak masuk ke PyTorch.
+    """
     if not raw_hands_list:
-        return pil_img
+        return None
     w, h = pil_img.size
+    if w <= 0 or h <= 0:
+        return None
     all_pts = np.concatenate(raw_hands_list, axis=0)
     xs, ys = all_pts[:, 0] * w, all_pts[:, 1] * h
     x_min, x_max = max(0.0, float(xs.min())), min(float(w), float(xs.max()))
     y_min, y_max = max(0.0, float(ys.min())), min(float(h), float(ys.max()))
-    side = max(x_max - x_min, y_max - y_min, 32.0) * (1.0 + 2 * margin)
+
+    bbox_w = x_max - x_min
+    bbox_h = y_max - y_min
+    if (
+        bbox_w < MIN_HAND_BBOX_PX
+        or bbox_h < MIN_HAND_BBOX_PX
+        or (bbox_w / float(w)) < MIN_HAND_BBOX_RATIO
+        or (bbox_h / float(h)) < MIN_HAND_BBOX_RATIO
+    ):
+        return None
+
+    side = max(bbox_w, bbox_h, float(MIN_HAND_BBOX_PX)) * (1.0 + 2 * margin)
     cx, cy = (x_min + x_max) / 2.0, (y_min + y_max) / 2.0
     left = int(max(0.0, cx - side / 2.0))
     top = int(max(0.0, cy - side / 2.0))
     right = int(min(float(w), cx + side / 2.0))
     bottom = int(min(float(h), cy + side / 2.0))
-    if right - left < 20 or bottom - top < 20:
-        return pil_img
+    if (right - left) < MIN_HAND_BBOX_PX or (bottom - top) < MIN_HAND_BBOX_PX:
+        return None
     return pil_img.crop((left, top, right, bottom))
 
 
@@ -245,6 +265,7 @@ class BisindoVisionService:
         self.lm_dim: int = 156
         self.model_loaded: bool = False
         self.active_mode: str = "mock"
+        self.load_error: Optional[str] = None
         self.last_good_angle: int = 0
         self.load_model()
 
@@ -267,15 +288,18 @@ class BisindoVisionService:
             return False
 
     def load_model(self) -> None:
+        self.load_error = None
         if self.mock_mode_config:
             self.model_loaded = False
             self.active_mode = "mock"
+            self.load_error = "AI_MOCK_MODE=true"
             logger.info("VisionService berjalan dalam mode mock (AI_MOCK_MODE=true).")
             return
 
         if not self.model_path.exists():
             self.model_loaded = False
             self.active_mode = "mock"
+            self.load_error = f"Checkpoint PyTorch tidak ditemukan di '{self.model_path}'."
             logger.warning(
                 "Checkpoint PyTorch tidak ditemukan di '%s'. Fallback aman ke mode mock.",
                 self.model_path,
@@ -285,6 +309,7 @@ class BisindoVisionService:
         if not self._ensure_hand_landmarker_file():
             self.model_loaded = False
             self.active_mode = "mock"
+            self.load_error = f"File MediaPipe hand_landmarker.task belum tersedia di '{self.landmarker_path}'."
             logger.warning(
                 "File MediaPipe hand_landmarker.task belum tersedia di '%s'. Fallback ke mode mock.",
                 self.landmarker_path,
@@ -337,13 +362,16 @@ class BisindoVisionService:
                 base_options=base_options,
                 running_mode=mp_vision.RunningMode.IMAGE,
                 num_hands=2,
-                min_hand_detection_confidence=0.35,
+                min_hand_detection_confidence=0.6,
+                min_hand_presence_confidence=0.6,
+                min_tracking_confidence=0.6,
             )
             self.landmarker = mp_vision.HandLandmarker.create_from_options(options)
             self._mp = mp
 
             self.model_loaded = True
             self.active_mode = "model"
+            self.load_error = None
             logger.info(
                 "Model BISINDO berhasil dimuat (%d kelas, lm_dim=%d, backbone=%s, device=%s).",
                 len(self.classes),
@@ -356,6 +384,7 @@ class BisindoVisionService:
             self.landmarker = None
             self.model_loaded = False
             self.active_mode = "mock"
+            self.load_error = str(exc)
             logger.exception(
                 "Gagal memuat pipeline PyTorch/MediaPipe (%s). Fallback ke mode mock.",
                 exc,
@@ -383,27 +412,19 @@ class BisindoVisionService:
         except (UnidentifiedImageError, OSError) as exc:
             raise ValueError("Payload bukan format gambar yang valid.") from exc
 
-    def _mock_predict(self, image_bytes: bytes) -> dict[str, Any]:
-        digest = hashlib.sha256(image_bytes).digest()
-        idx1 = digest[0] % len(MOCK_ALPHABET)
-        idx2 = (idx1 + 3) % len(MOCK_ALPHABET)
-        idx3 = (idx1 + 7) % len(MOCK_ALPHABET)
-
-        s1 = round(0.90 + (digest[1] % 8) * 0.01, 2)
-        s2 = round(max(0.01, (1.0 - s1) * 0.65), 2)
-        s3 = round(max(0.01, 1.0 - s1 - s2), 2)
-
+    def _mock_predict(self, _image_bytes: bytes) -> dict[str, Any]:
+        """Mode mock tidak boleh mengeluarkan huruf palsu saat model AI belum dimuat."""
+        logger.warning(
+            "[VISION] Model AI belum aktif (mode=mock, reason=%s). Mengembalikan hasil kosong.",
+            self.load_error or "unknown",
+        )
         return {
-            "detected": True,
-            "hand_found": True,
-            "hands_detected": 1,
-            "letter": MOCK_ALPHABET[idx1],
-            "confidence": s1,
-            "top3": [
-                {"label": MOCK_ALPHABET[idx1], "score": s1},
-                {"label": MOCK_ALPHABET[idx2], "score": s2},
-                {"label": MOCK_ALPHABET[idx3], "score": s3},
-            ],
+            "detected": False,
+            "hand_found": False,
+            "hands_detected": 0,
+            "letter": None,
+            "confidence": 0.0,
+            "top3": [],
             "mode": "mock",
         }
 
@@ -433,18 +454,12 @@ class BisindoVisionService:
 
     def _run_model_inference(
         self,
-        pil_img: Image.Image,
+        pil_roi: Image.Image,
         feat_vec: np.ndarray,
-        raw_hands: list[np.ndarray],
-    ) -> tuple[list[dict[str, Any]], Image.Image]:
+    ) -> list[dict[str, Any]]:
         """Inferensi ConvNeXt-Tiny + Landmark 156-dim identik 1:1 dengan Testing_V_03_BISINDO.ipynb."""
         import torch
 
-        pil_roi = (
-            crop_hand_roi(pil_img, raw_hands, margin=0.25)
-            if USE_ROI_CROP
-            else pil_img
-        )
         img_tensor = self.val_tf(pil_roi).unsqueeze(0).to(self.device)
         lm_tensor = torch.from_numpy(feat_vec).unsqueeze(0).to(self.device)
 
@@ -454,14 +469,13 @@ class BisindoVisionService:
             k = min(3, len(self.classes))
             top_scores, top_indices = torch.topk(probs, k=k)
 
-        top3 = [
+        return [
             {
                 "label": self.classes[int(idx.item())],
                 "score": round(float(score.item()), 4),
             }
             for score, idx in zip(top_scores, top_indices)
         ]
-        return top3, pil_roi
 
     def predict_sign(
         self,
@@ -470,10 +484,11 @@ class BisindoVisionService:
         mirror: bool = False,
     ) -> dict[str, Any]:
         """
-        Pipeline 1:1 dengan Google Colab testing:
-        Frame upright dari HTML5 <canvas> -> MediaPipe HandLandmarker (156 dim) ->
-        Square ROI Crop (margin=0.25) -> Resize(224,224) + ImageNet Normalize -> ConvNeXt-Tiny.
-        Tanpa rotasi paksa/multi-angle hack agar latensi inferensi < 200-300 ms.
+        Pipeline BISINDO terkalibrasi anti-false-positive:
+        1. MediaPipe HandLandmarker (min_detection=0.6, min_presence=0.6)
+        2. Validasi ukuran bounding box tangan (>= 40px & >= 8% frame; tolak jika terlalu kecil)
+        3. Square ROI Crop (margin=0.25) -> Resize(224,224) + ImageNet Normalize -> ConvNeXt-Tiny
+        4. Filter threshold confidence softmax >= 0.70 sebelum mengembalikan detected=True
         """
         _ = roi_box
         t0 = time.perf_counter()
@@ -505,13 +520,54 @@ class BisindoVisionService:
                     "mode": "model",
                 }
 
-            top3, pil_roi = self._run_model_inference(pil_img, feat_vec, raw_hands)
+            pil_roi = (
+                crop_hand_roi(pil_img, raw_hands, margin=0.25)
+                if USE_ROI_CROP
+                else pil_img
+            )
+            if pil_roi is None:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                logger.info(
+                    "[VISION] total=%.0fms | hands=0 (bbox terlalu kecil/noise) | pred=- (0.00)",
+                    elapsed_ms,
+                )
+                return {
+                    "detected": False,
+                    "hand_found": False,
+                    "hands_detected": 0,
+                    "letter": None,
+                    "confidence": 0.0,
+                    "top3": [],
+                    "mode": "model",
+                }
+
+            top3 = self._run_model_inference(pil_roi, feat_vec)
             self._save_debug_image(pil_img, DEBUG_LAST_FRAME_PATH)
             self._save_debug_image(pil_roi, DEBUG_LAST_ROI_PATH)
 
             best = top3[0]
             hands_count = len(raw_hands)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+            if best["score"] < MIN_MODEL_CONFIDENCE:
+                logger.info(
+                    "[VISION] total=%.0fms | hands=%d | rejected low-conf %s (%.2f < %.2f)",
+                    elapsed_ms,
+                    hands_count,
+                    best["label"],
+                    best["score"],
+                    MIN_MODEL_CONFIDENCE,
+                )
+                return {
+                    "detected": False,
+                    "hand_found": True,
+                    "hands_detected": hands_count,
+                    "letter": None,
+                    "confidence": best["score"],
+                    "top3": top3,
+                    "mode": "model",
+                }
+
             logger.info(
                 "[VISION] total=%.0fms | hands=%d | pred=%s (%.2f)",
                 elapsed_ms,
@@ -536,6 +592,7 @@ class BisindoVisionService:
         return {
             "ai_mode": self.active_mode,
             "model_loaded": self.model_loaded,
+            "load_error": self.load_error,
         }
 
 

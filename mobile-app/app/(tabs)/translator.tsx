@@ -60,8 +60,7 @@ import {
 } from "@/services/api";
 
 const STABILITY_THRESHOLD = 3;
-const MIN_CONFIDENCE = 0.55;
-const INSTANT_LOCK_CONFIDENCE = 0.88;
+const MIN_CONFIDENCE = 0.7;
 const AUTO_SPACE_EMPTY_CYCLES = 5;
 const SNAPSHOT_INTERVAL_MS = 350;
 
@@ -248,21 +247,37 @@ export default function TranslatorScreen() {
         facing === "front"
       );
 
-      setSignError(null);
       if (res.mode === "mock" || res.mode === "model") {
         setVisionMode(res.mode);
       }
 
+      // Tolak mentah-mentah jika server sedang berjalan di mode mock (model AI belum dimuat)
+      if (res.mode === "mock") {
+        setHandFound(false);
+        setLowConfidenceHint(false);
+        setCandidateLetter(null);
+        setCandidateConfidence(0);
+        setStabilityCount(0);
+        stableCandidateRef.current = { letter: null, count: 0, lastLocked: null };
+        setSignError(
+          "Model AI BISINDO di server belum aktif (mode: mock). Periksa file model & log server backend."
+        );
+        return;
+      }
+
+      setSignError(null);
+
       const handsCount = Number(res.hands_detected ?? (res.hand_found ? 1 : 0));
       setHandFound(handsCount > 0);
 
-      if (handsCount === 0 || !res.hand_found || !res.detected || !res.letter) {
+      if (handsCount === 0 || !res.hand_found) {
         setLowConfidenceHint(false);
         setCandidateLetter(null);
         setCandidateConfidence(0);
         setStabilityCount(0);
         stableCandidateRef.current.letter = null;
         stableCandidateRef.current.count = 0;
+        stableCandidateRef.current.lastLocked = null;
 
         emptyHandCyclesRef.current += 1;
         if (
@@ -278,7 +293,7 @@ export default function TranslatorScreen() {
       emptyHandCyclesRef.current = 0;
       const confidence = Number(res.confidence || 0);
 
-      if (confidence < MIN_CONFIDENCE) {
+      if (!res.detected || !res.letter || confidence < MIN_CONFIDENCE) {
         setLowConfidenceHint(true);
         setCandidateLetter(null);
         setCandidateConfidence(confidence);
@@ -293,22 +308,7 @@ export default function TranslatorScreen() {
       setCandidateLetter(letter);
       setCandidateConfidence(confidence);
 
-      // Kunci instan jika confidence sangat tinggi (>= 0.88), atau tunggu stabil STABILITY_THRESHOLD frame
-      if (
-        confidence >= INSTANT_LOCK_CONFIDENCE &&
-        stableCandidateRef.current.lastLocked !== letter
-      ) {
-        stableCandidateRef.current.letter = letter;
-        stableCandidateRef.current.lastLocked = letter;
-        stableCandidateRef.current.count = 0;
-        setStabilityCount(STABILITY_THRESHOLD);
-        setCurrentLetters((prev) => [...prev, letter]);
-        if (settings.haptic_enabled) {
-          Haptics.selectionAsync().catch(() => {});
-        }
-        return;
-      }
-
+      // Wajib stabil STABILITY_THRESHOLD frame berturut-turut (tanpa instant-lock 1 frame)
       if (stableCandidateRef.current.letter === letter) {
         const nextCount = stableCandidateRef.current.count + 1;
         stableCandidateRef.current.count = nextCount;
