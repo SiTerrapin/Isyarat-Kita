@@ -1,6 +1,7 @@
 import hashlib
 import io
 import logging
+import os
 import time
 import urllib.request
 from pathlib import Path
@@ -19,6 +20,8 @@ MAX_INPUT_SIDE = 640
 MIN_HAND_BBOX_PX = 40
 MIN_HAND_BBOX_RATIO = 0.08
 MIN_MODEL_CONFIDENCE = 0.70
+MIN_MODEL_FILE_BYTES = 100 * 1024 * 1024  # 100 MB (file bobot ConvNeXt-Tiny ~111 MB)
+MODEL_DOWNLOAD_TIMEOUT_SEC = 180
 
 HAND_LANDMARKER_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -287,6 +290,117 @@ class BisindoVisionService:
             logger.warning("Gagal auto-download hand_landmarker.task: %s", exc)
             return False
 
+    def _ensure_model_file(self) -> bool:
+        """
+        Pastikan bobot model PyTorch (.pth) tersedia & valid (>= 100 MB).
+        Jika file belum ada atau parsial/korup, unduh otomatis dari settings.AI_MODEL_URL
+        ke file sementara (.tmp) lalu lakukan rename atomik (os.replace).
+        """
+        if self.model_path.exists():
+            try:
+                file_size = self.model_path.stat().st_size
+            except OSError:
+                file_size = 0
+
+            if file_size >= MIN_MODEL_FILE_BYTES:
+                return True
+
+            logger.warning(
+                "File model '%s' terlalu kecil/parsial (%.2f MB < %.0f MB). Menghapus agar dapat diunduh ulang.",
+                self.model_path,
+                file_size / (1024 * 1024),
+                MIN_MODEL_FILE_BYTES / (1024 * 1024),
+            )
+            try:
+                self.model_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Gagal menghapus file model parsial '%s': %s", self.model_path, exc)
+
+        download_url = (settings.AI_MODEL_URL or "").strip()
+        if not download_url:
+            self.load_error = (
+                f"Checkpoint PyTorch tidak ditemukan di '{self.model_path}' "
+                "dan environment variable AI_MODEL_URL belum diatur."
+            )
+            logger.warning(self.load_error)
+            return False
+
+        tmp_path = self.model_path.with_suffix(self.model_path.suffix + ".tmp")
+        try:
+            self.model_path.parent.mkdir(parents=True, exist_ok=True)
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+            logger.info(
+                "Mengunduh bobot model BISINDO dari %s ke %s...",
+                download_url,
+                self.model_path,
+            )
+            t0 = time.perf_counter()
+            req = urllib.request.Request(
+                download_url,
+                headers={"User-Agent": "IsyaratKita-Backend/2.0"},
+            )
+            downloaded = 0
+            next_log_mb = 20
+            with urllib.request.urlopen(req, timeout=MODEL_DOWNLOAD_TIMEOUT_SEC) as resp:
+                total_header = resp.headers.get("Content-Length")
+                total_mb = (
+                    float(total_header) / (1024 * 1024)
+                    if total_header and total_header.isdigit()
+                    else None
+                )
+                with tmp_path.open("wb") as out_f:
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out_f.write(chunk)
+                        downloaded += len(chunk)
+                        downloaded_mb = downloaded / (1024 * 1024)
+                        if downloaded_mb >= next_log_mb:
+                            if total_mb:
+                                logger.info(
+                                    "Progres unduhan model BISINDO: %.1f / %.1f MB (%.0f%%)",
+                                    downloaded_mb,
+                                    total_mb,
+                                    min(100.0, (downloaded_mb / total_mb) * 100.0),
+                                )
+                            else:
+                                logger.info(
+                                    "Progres unduhan model BISINDO: %.1f MB...",
+                                    downloaded_mb,
+                                )
+                            next_log_mb += 20
+
+            if downloaded < MIN_MODEL_FILE_BYTES:
+                tmp_path.unlink(missing_ok=True)
+                self.load_error = (
+                    f"Unduhan model dari AI_MODEL_URL terlalu kecil "
+                    f"({downloaded / (1024 * 1024):.2f} MB < {MIN_MODEL_FILE_BYTES / (1024 * 1024):.0f} MB). "
+                    "Pastikan URL mengarah langsung ke file .pth (bukan halaman HTML)."
+                )
+                logger.error(self.load_error)
+                return False
+
+            os.replace(str(tmp_path), str(self.model_path))
+            elapsed = time.perf_counter() - t0
+            logger.info(
+                "Unduhan bobot model BISINDO selesai (%.2f MB dalam %.1f detik): %s",
+                downloaded / (1024 * 1024),
+                elapsed,
+                self.model_path,
+            )
+            return True
+        except Exception as exc:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.load_error = f"Gagal mengunduh model dari AI_MODEL_URL: {exc}"
+            logger.exception(self.load_error)
+            return False
+
     def load_model(self) -> None:
         self.load_error = None
         if self.mock_mode_config:
@@ -296,14 +410,9 @@ class BisindoVisionService:
             logger.info("VisionService berjalan dalam mode mock (AI_MOCK_MODE=true).")
             return
 
-        if not self.model_path.exists():
+        if not self._ensure_model_file():
             self.model_loaded = False
             self.active_mode = "mock"
-            self.load_error = f"Checkpoint PyTorch tidak ditemukan di '{self.model_path}'."
-            logger.warning(
-                "Checkpoint PyTorch tidak ditemukan di '%s'. Fallback aman ke mode mock.",
-                self.model_path,
-            )
             return
 
         if not self._ensure_hand_landmarker_file():
