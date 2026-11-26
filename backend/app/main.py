@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.db.database import SessionLocal, init_db
+from app.db.database import ACTIVE_DB_SOURCE, SessionLocal, init_db
 from app.routers import ai, alerts, auth, camera_view, cards, logs, settings as settings_router, speech
 from app.services.vision_service import vision_service
 
@@ -97,6 +97,7 @@ def health_check() -> dict[str, object]:
     return {
         "status": "ok",
         "database": db_status,
+        "db_source": ACTIVE_DB_SOURCE,
         "ai_mode": ai_status["ai_mode"],
         "model_loaded": ai_status["model_loaded"],
         "load_error": ai_status.get("load_error"),
