@@ -11,7 +11,6 @@ import React, {
 
 import {
   api,
-  DEFAULT_API_BASE_URL,
   detectExpoHostServerUrl,
   HealthResponse,
   isLegacyDefaultUrl,
@@ -26,6 +25,14 @@ import {
   UserProfile,
   UserSettings,
 } from "@/services/api";
+import {
+  getApiBaseUrl,
+  getManualBaseUrl,
+  RENDER_ROUTER_URL,
+  resetCachedBaseUrl,
+  setManualBaseUrl,
+  subscribeApiBaseUrl,
+} from "@/services/apiConfig";
 
 const STORAGE_KEYS = {
   SERVER_URL: "@isyarat_kita:server_url",
@@ -37,7 +44,7 @@ const STORAGE_KEYS = {
 
 export type ThemeMode = "light" | "dark" | "system";
 
-const FALLBACK_SERVER_URL = DEFAULT_API_BASE_URL;
+const FALLBACK_SERVER_URL = RENDER_ROUTER_URL;
 
 const DEFAULT_SETTINGS: UserSettings = {
   alert_threshold_db: 75,
@@ -55,6 +62,7 @@ interface AppContextValue {
   isDark: boolean;
   setThemeMode: (mode: ThemeMode) => Promise<void>;
   serverUrl: string;
+  isManualServerUrl: boolean;
   detectedHostUrl: string | null;
   serverStatus: ServerStatus;
   healthInfo: HealthResponse | null;
@@ -73,6 +81,7 @@ interface AppContextValue {
   closeAuthModal: () => void;
   requireAuth: (reason: string, action: () => void) => void;
   updateServerUrl: (newUrl: string) => Promise<boolean>;
+  resetToAutoRouter: () => Promise<boolean>;
   autoDetectServerUrl: () => Promise<string | null>;
   refreshHealth: (overrideUrl?: string, silent?: boolean) => Promise<boolean>;
   login: (email: string, password: string) => Promise<void>;
@@ -106,6 +115,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const detectedHostUrl = detectExpoHostServerUrl(8000);
   const [isHydrated, setIsHydrated] = useState(false);
   const [serverUrl, setServerUrlState] = useState(FALLBACK_SERVER_URL);
+  const [isManualServerUrl, setIsManualServerUrl] = useState(false);
+
+  // Sinkronkan state serverUrl setiap kali apiConfig melakukan auto-refresh tunnel URL
+  useEffect(() => {
+    return subscribeApiBaseUrl((nextUrl) => {
+      setServerUrlState(nextUrl);
+    });
+  }, []);
   const [serverStatus, setServerStatus] = useState<ServerStatus>("checking");
   const [healthInfo, setHealthInfo] = useState<HealthResponse | null>(null);
   const [lastHealthError, setLastHealthError] = useState<string | null>(null);
@@ -207,12 +224,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setColorScheme(resolvedTheme);
         }
 
-        const storedUrl = savedUrl[1] ? normalizeBaseUrl(savedUrl[1]) : null;
-        // Gunakan URL produksi default (https://isyarat-kita.onrender.com) bila belum ada URL kustom atau masih URL lokal lama
-        const resolvedUrl =
-          storedUrl && !isLegacyDefaultUrl(storedUrl)
-            ? storedUrl
-            : FALLBACK_SERVER_URL;
+        // Prioritas 1: Manual Override di apiConfig; bila belum ada, auto-fetch tunnel aktif dari Render Router
+        let manualUrl = await getManualBaseUrl();
+        if (!manualUrl && savedUrl[1]) {
+          const legacyStored = normalizeBaseUrl(savedUrl[1]);
+          if (
+            legacyStored &&
+            !isLegacyDefaultUrl(legacyStored) &&
+            legacyStored.toLowerCase() !== RENDER_ROUTER_URL.toLowerCase()
+          ) {
+            manualUrl = await setManualBaseUrl(legacyStored);
+          }
+        }
+        const resolvedUrl = manualUrl || (await getApiBaseUrl());
         const resolvedToken = savedToken[1] || null;
         const resolvedUser: UserProfile | null = savedUserRaw[1]
           ? JSON.parse(savedUserRaw[1])
@@ -223,6 +247,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (!active) return;
 
+        setIsManualServerUrl(Boolean(manualUrl));
         setServerUrlState(resolvedUrl);
         setAuthToken(resolvedToken);
         setUser(resolvedUser);
@@ -294,20 +319,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const updateServerUrl = useCallback(
     async (newUrl: string): Promise<boolean> => {
       const clean = normalizeBaseUrl(newUrl);
-      setServerUrlState(clean);
-      await AsyncStorage.setItem(STORAGE_KEYS.SERVER_URL, clean);
-      const ok = await refreshHealth(clean);
+      const isRouterOrEmpty =
+        !clean || clean.toLowerCase() === RENDER_ROUTER_URL.toLowerCase();
+
+      let targetUrl: string;
+      if (isRouterOrEmpty) {
+        await setManualBaseUrl(null);
+        await AsyncStorage.removeItem(STORAGE_KEYS.SERVER_URL);
+        resetCachedBaseUrl();
+        setIsManualServerUrl(false);
+        targetUrl = await getApiBaseUrl(true);
+      } else {
+        await setManualBaseUrl(clean);
+        await AsyncStorage.setItem(STORAGE_KEYS.SERVER_URL, clean);
+        setIsManualServerUrl(true);
+        targetUrl = clean;
+      }
+
+      setServerUrlState(targetUrl);
+      const ok = await refreshHealth(targetUrl);
       if (ok) {
-        refreshCardsWith(clean, authToken);
+        refreshCardsWith(targetUrl, authToken);
         if (authToken) {
-          refreshLogsWith(clean, authToken);
-          refreshAlertsWith(clean, authToken);
+          refreshLogsWith(targetUrl, authToken);
+          refreshAlertsWith(targetUrl, authToken);
         }
       }
       return ok;
     },
     [authToken, refreshHealth, refreshCardsWith, refreshLogsWith, refreshAlertsWith]
   );
+
+  const resetToAutoRouter = useCallback(async (): Promise<boolean> => {
+    return updateServerUrl("");
+  }, [updateServerUrl]);
 
   const autoDetectServerUrl = useCallback(async (): Promise<string | null> => {
     const detected = detectExpoHostServerUrl(8000);
@@ -528,6 +573,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isDark,
         setThemeMode,
         serverUrl,
+        isManualServerUrl,
         detectedHostUrl,
         serverStatus,
         healthInfo,
@@ -546,6 +592,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         closeAuthModal,
         requireAuth,
         updateServerUrl,
+        resetToAutoRouter,
         autoDetectServerUrl,
         refreshHealth,
         login,

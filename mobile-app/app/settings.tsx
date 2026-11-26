@@ -14,7 +14,7 @@ import {
   X,
   XCircle,
 } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -54,6 +54,7 @@ export default function SettingsModalScreen() {
     isDark,
     setThemeMode,
     serverUrl,
+    isManualServerUrl,
     detectedHostUrl,
     serverStatus,
     healthInfo,
@@ -62,6 +63,7 @@ export default function SettingsModalScreen() {
     user,
     settings,
     updateServerUrl,
+    resetToAutoRouter,
     autoDetectServerUrl,
     saveSettings,
     openAuthModal,
@@ -71,6 +73,10 @@ export default function SettingsModalScreen() {
   const [urlInput, setUrlInput] = useState(serverUrl);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
+
+  useEffect(() => {
+    setUrlInput(serverUrl);
+  }, [serverUrl]);
 
   const {
     speak,
@@ -108,17 +114,27 @@ export default function SettingsModalScreen() {
     }
   };
 
+  const handleResetAutoRouter = async () => {
+    setTesting(true);
+    setTestResult(null);
+    const ok = await resetToAutoRouter();
+    setTesting(false);
+    setTestResult(ok ? "ok" : "fail");
+  };
+
   const handleTestConnection = async () => {
     const cleanedUrl = normalizeBaseUrl(urlInput);
-    if (!/^https?:\/\//i.test(cleanedUrl)) {
+    if (cleanedUrl && !/^https?:\/\//i.test(cleanedUrl)) {
       Alert.alert(
         "URL Tidak Valid",
-        "Masukkan URL lengkap diawali http:// atau https:// (contoh: https://xxx.trycloudflare.com)."
+        "Masukkan URL lengkap diawali http:// atau https:// (contoh: http://192.168.1.6:8000 atau kosongkan untuk Mode Otomatis Render Router)."
       );
       return;
     }
     setUrlInput(cleanedUrl);
-    console.log(`[SETTINGS] Menyimpan & tes koneksi: ${cleanedUrl}/health`);
+    console.log(
+      `[SETTINGS] Menyimpan & tes koneksi: ${cleanedUrl || "(Auto Render Router)"}/health`
+    );
     setTesting(true);
     setTestResult(null);
     const ok = await updateServerUrl(cleanedUrl);
@@ -217,21 +233,41 @@ export default function SettingsModalScreen() {
 
         {/* Server Backend URL */}
         <View className="mb-5 rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-          <View className="mb-3 flex-row items-center">
-            <Server size={20} color={isDark ? "#2DD4BF" : "#0D9488"} />
-            <Text className="ml-2 text-base font-bold text-slate-900 dark:text-white">
-              Koneksi Server Backend AI
-            </Text>
+          <View className="mb-2 flex-row items-center justify-between">
+            <View className="flex-row items-center">
+              <Server size={20} color={isDark ? "#2DD4BF" : "#0D9488"} />
+              <Text className="ml-2 text-base font-bold text-slate-900 dark:text-white">
+                Koneksi Server Backend AI
+              </Text>
+            </View>
+            <View
+              className={`rounded-full px-2.5 py-1 ${
+                isManualServerUrl
+                  ? "bg-amber-100 dark:bg-amber-950"
+                  : "bg-teal-100 dark:bg-teal-950"
+              }`}
+            >
+              <Text
+                className={`text-[11px] font-bold ${
+                  isManualServerUrl
+                    ? "text-amber-800 dark:text-amber-300"
+                    : "text-teal-800 dark:text-teal-300"
+                }`}
+              >
+                {isManualServerUrl ? "Manual Override" : "Auto Render Router"}
+              </Text>
+            </View>
           </View>
           <Text className="mb-3 text-sm text-slate-600 dark:text-slate-400">
-            Masukkan IP lokal laptop (contoh: http://192.168.1.6:8000) atau URL
-            ngrok agar HP dapat terhubung ke server FastAPI.
+            Default memakai Dynamic Cloudflare Tunnel via Render Router. Anda
+            juga bisa mengisi URL lokal (http://192.168.x.x:8000) atau link
+            tunnel manual sebagai cadangan.
           </Text>
 
           <TextInput
             value={urlInput}
             onChangeText={setUrlInput}
-            placeholder={detectedHostUrl || "http://192.168.1.6:8000"}
+            placeholder={detectedHostUrl || "https://xxx.trycloudflare.com"}
             placeholderTextColor="#94A3B8"
             autoCapitalize="none"
             autoCorrect={false}
@@ -241,12 +277,12 @@ export default function SettingsModalScreen() {
 
           <View className="flex-row gap-2">
             <Pressable
-              onPress={handleAutoDetect}
+              onPress={handleResetAutoRouter}
               disabled={testing}
-              className="items-center justify-center rounded-2xl border border-teal-600 bg-teal-50 px-4 py-3.5 active:bg-teal-100 dark:bg-teal-950"
+              className="items-center justify-center rounded-2xl border border-teal-600 bg-teal-50 px-3.5 py-3.5 active:bg-teal-100 dark:bg-teal-950"
             >
-              <Text className="text-sm font-bold text-teal-700 dark:text-teal-300">
-                Deteksi IP Otomatis
+              <Text className="text-xs font-bold text-teal-700 dark:text-teal-300">
+                Auto Router
               </Text>
             </Pressable>
 
