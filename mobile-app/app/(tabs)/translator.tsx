@@ -55,6 +55,7 @@ import { useApp } from "@/context/AppContext";
 import { useTTS } from "@/hooks/useTTS";
 import {
   api,
+  getApiBaseUrl,
   TTS_VOICE_CHOICES,
   TTSVoiceOption,
 } from "@/services/api";
@@ -206,7 +207,8 @@ export default function TranslatorScreen() {
     stableCandidateRef.current.lastLocked = null;
 
     try {
-      const res = await api.correctWord(serverUrl, letters, prevWord);
+      const activeBaseUrl = await getApiBaseUrl();
+      const res = await api.correctWord(activeBaseUrl, letters, prevWord);
       const word = res.corrected_word || letters.join("");
       if (word) {
         setGlossWords((prev) => [...prev, word]);
@@ -217,7 +219,7 @@ export default function TranslatorScreen() {
         setGlossWords((prev) => [...prev, fallbackWord]);
       }
     }
-  }, [serverUrl]);
+  }, []);
 
   const captureSnapshotAndPredict = useCallback(async () => {
     if (!cameraRef.current || isProcessingRef.current || !device) return;
@@ -239,9 +241,10 @@ export default function TranslatorScreen() {
       });
       if (!base64) return;
 
-      // Kamera depan di-mirror di backend agar 1:1 konsisten dengan training Google Colab
+      // Ambil URL backend dinamis (Manual Override / Cache / Render Router) + mirror kamera depan
+      const activeBaseUrl = await getApiBaseUrl();
       const res = await api.predictSignBase64(
-        serverUrl,
+        activeBaseUrl,
         base64,
         null,
         facing === "front"
@@ -411,7 +414,8 @@ export default function TranslatorScreen() {
     setSignError(null);
     setAiReply("");
     try {
-      const res = await api.refineText(serverUrl, wordsToRefine, chatAiEnabled);
+      const activeBaseUrl = await getApiBaseUrl();
+      const res = await api.refineText(activeBaseUrl, wordsToRefine, chatAiEnabled);
       const sentence = res.sentence || res.refined_text || "";
       setNaturalSentence(sentence);
       if (chatAiEnabled && res.ai_reply) {
@@ -555,7 +559,8 @@ export default function TranslatorScreen() {
           throw new Error("File rekaman audio tidak ditemukan.");
         }
 
-        const stt = await api.transcribeAudio(serverUrl, uri, "chat_voice.m4a");
+        const activeBaseUrl = await getApiBaseUrl();
+        const stt = await api.transcribeAudio(activeBaseUrl, uri, "chat_voice.m4a");
         if (stt.text && stt.text.trim()) {
           const assignedRole = targetRole ?? chatRole;
           appendChatMessage(assignedRole, stt.text, "suara");

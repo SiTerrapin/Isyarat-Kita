@@ -1,6 +1,23 @@
 import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
 
+import {
+  cleanBaseUrl,
+  getApiBaseUrl,
+  hasManualBaseUrl,
+  RENDER_ROUTER_URL,
+  resetCachedBaseUrl,
+  setManualBaseUrl,
+} from "./apiConfig";
+
+export {
+  getApiBaseUrl,
+  hasManualBaseUrl,
+  RENDER_ROUTER_URL,
+  resetCachedBaseUrl,
+  setManualBaseUrl,
+};
+
 export type CardCategory =
   | "darurat"
   | "kesehatan"
@@ -276,15 +293,11 @@ export class ApiError extends Error {
   }
 }
 
-export const DEFAULT_API_BASE_URL = "https://isyarat-kita.onrender.com";
+export const DEFAULT_API_BASE_URL = RENDER_ROUTER_URL;
 export const API_BASE_URL = DEFAULT_API_BASE_URL;
 
 export function normalizeBaseUrl(url: string): string {
-  return url
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/\/+$/, "")
-    .replace(/\/(api\/)?health$/i, "");
+  return cleanBaseUrl(url);
 }
 
 /**
@@ -323,7 +336,28 @@ export function isLegacyDefaultUrl(url: string | null): boolean {
   );
 }
 
-async function request<T>(
+const RETRYABLE_TUNNEL_STATUSES = new Set([0, 408, 502, 503, 504]);
+
+function isRetryableTunnelError(err: unknown): boolean {
+  if (err instanceof ApiError) {
+    return RETRYABLE_TUNNEL_STATUSES.has(err.status);
+  }
+  return true;
+}
+
+async function resolveEffectiveBaseUrl(baseUrl?: string): Promise<string> {
+  const cleaned = baseUrl ? normalizeBaseUrl(baseUrl) : "";
+  if (hasManualBaseUrl()) {
+    return cleaned || (await getApiBaseUrl());
+  }
+  // Jika dalam mode otomatis dan caller mengirim kosong atau URL router default, ambil tunnel aktif
+  if (!cleaned || cleaned.toLowerCase() === RENDER_ROUTER_URL.toLowerCase()) {
+    return await getApiBaseUrl();
+  }
+  return cleaned;
+}
+
+async function executeSingleRequest<T>(
   baseUrl: string,
   path: string,
   options: {
@@ -388,13 +422,13 @@ async function request<T>(
     }
     if (err?.name === "AbortError") {
       throw new ApiError(
-        `Timeout (${Math.round(timeoutMs / 1000)}d) menghubungi ${fullUrl}. Periksa Firewall Windows / jaringan.`,
+        `Timeout (${Math.round(timeoutMs / 1000)}d) menghubungi ${fullUrl}.`,
         408
       );
     }
     const rawMsg = err?.message ? ` (${err.message})` : "";
     throw new ApiError(
-      `Network request failed ke ${normalizeBaseUrl(baseUrl)}${rawMsg}. Pastikan Uvicorn aktif di 0.0.0.0:8000 & port 8000 terbuka di Firewall.`,
+      `Network request failed ke ${normalizeBaseUrl(baseUrl)}${rawMsg}. Pastikan backend & tunnel aktif.`,
       0
     );
   } finally {
@@ -402,9 +436,38 @@ async function request<T>(
   }
 }
 
+async function request<T>(
+  baseUrl: string,
+  path: string,
+  options: {
+    method?: string;
+    token?: string | null;
+    body?: unknown;
+    timeoutMs?: number;
+  } = {}
+): Promise<T> {
+  const targetBase = await resolveEffectiveBaseUrl(baseUrl);
+  try {
+    return await executeSingleRequest<T>(targetBase, path, options);
+  } catch (err: any) {
+    // Auto-refresh tunnel URL dari Render Router & retry 1x jika mode otomatis dan error jaringan/502/503/504
+    if (!hasManualBaseUrl() && isRetryableTunnelError(err)) {
+      console.log(
+        `[API AUTO-REFRESH] Request ke ${targetBase}${path} gagal (${err?.status ?? "network"}). Mengambil URL tunnel baru dari Render Router...`
+      );
+      resetCachedBaseUrl();
+      const refreshedBase = await getApiBaseUrl(true);
+      if (refreshedBase && refreshedBase !== targetBase) {
+        return await executeSingleRequest<T>(refreshedBase, path, options);
+      }
+    }
+    throw err;
+  }
+}
+
 export const api = {
-  checkHealth: async (baseUrl: string): Promise<HealthResponse> => {
-    const cleanBase = normalizeBaseUrl(baseUrl);
+  checkHealth: async (baseUrl?: string): Promise<HealthResponse> => {
+    const cleanBase = await resolveEffectiveBaseUrl(baseUrl);
     const primaryUrl = `${cleanBase}/health`;
     console.log(`[HEALTH] Testing: ${primaryUrl}`);
     try {
@@ -560,14 +623,14 @@ export const api = {
       );
     }
 
-    const endpoint = `${normalizeBaseUrl(baseUrl)}/api/stt`;
     const mimeType = filename.endsWith(".wav")
       ? "audio/wav"
       : filename.endsWith(".3gp")
       ? "audio/3gpp"
       : "audio/mp4";
 
-    try {
+    const runUpload = async (targetBase: string): Promise<STTResponse> => {
+      const endpoint = `${normalizeBaseUrl(targetBase)}/api/stt`;
       const uploadPromise = FileSystem.uploadAsync(endpoint, fileUri, {
         httpMethod: "POST",
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
@@ -615,11 +678,23 @@ export const api = {
       }
 
       return parsed as STTResponse;
+    };
+
+    const initialBase = await resolveEffectiveBaseUrl(baseUrl);
+    try {
+      return await runUpload(initialBase);
     } catch (err: any) {
+      if (!hasManualBaseUrl() && isRetryableTunnelError(err)) {
+        resetCachedBaseUrl();
+        const refreshedBase = await getApiBaseUrl(true);
+        if (refreshedBase && refreshedBase !== initialBase) {
+          return await runUpload(refreshedBase);
+        }
+      }
       if (err instanceof ApiError) throw err;
       const raw = err?.message ? ` (${err.message})` : "";
       throw new ApiError(
-        `Server STT tidak terjangkau di ${endpoint}${raw}. Pastikan Uvicorn aktif di port 8000.`,
+        `Server STT tidak terjangkau di ${initialBase}${raw}. Pastikan backend & tunnel aktif.`,
         0
       );
     }
@@ -629,22 +704,38 @@ export const api = {
     baseUrl: string,
     fileUri: string
   ): Promise<SoundDetectResponse> => {
-    const endpoint = `${normalizeBaseUrl(baseUrl)}/api/classify-sound`;
-    const result = await FileSystem.uploadAsync(endpoint, fileUri, {
-      httpMethod: "POST",
-      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-      fieldName: "file",
-      mimeType: "audio/mp4",
-      headers: { Accept: "application/json" },
-    });
+    const runUpload = async (targetBase: string): Promise<SoundDetectResponse> => {
+      const endpoint = `${normalizeBaseUrl(targetBase)}/api/classify-sound`;
+      const result = await FileSystem.uploadAsync(endpoint, fileUri, {
+        httpMethod: "POST",
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: "file",
+        mimeType: "audio/mp4",
+        headers: { Accept: "application/json" },
+      });
 
-    if (result.status < 200 || result.status >= 300) {
-      throw new ApiError(
-        `Deteksi pola suara gagal (HTTP ${result.status})`,
-        result.status
-      );
+      if (result.status < 200 || result.status >= 300) {
+        throw new ApiError(
+          `Deteksi pola suara gagal (HTTP ${result.status})`,
+          result.status
+        );
+      }
+      return JSON.parse(result.body) as SoundDetectResponse;
+    };
+
+    const initialBase = await resolveEffectiveBaseUrl(baseUrl);
+    try {
+      return await runUpload(initialBase);
+    } catch (err: any) {
+      if (!hasManualBaseUrl() && isRetryableTunnelError(err)) {
+        resetCachedBaseUrl();
+        const refreshedBase = await getApiBaseUrl(true);
+        if (refreshedBase && refreshedBase !== initialBase) {
+          return await runUpload(refreshedBase);
+        }
+      }
+      throw err;
     }
-    return JSON.parse(result.body) as SoundDetectResponse;
   },
 
   synthesizeSpeechBase64: (
