@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "Isyarat Kita API"
     APP_VERSION: str = "2.0.0"
 
+    DATABASE_URL_LOCAL: str | None = None
+    DATABASE_URL_DEPLOY: str | None = None
     DATABASE_URL: str = "postgresql://postgres:password123@localhost:15432/isyarat_kita"
 
     SECRET_KEY: str = "isyarat-kita-super-secret-jwt-key-change-in-production-2026"
