@@ -39,6 +39,7 @@ import {
   Alert,
   AppState,
   AppStateStatus,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -509,6 +510,18 @@ export default function TranslatorScreen() {
     }, 1000);
     return () => clearInterval(timer);
   }, [isRecordingChat]);
+
+  // Auto-scroll daftar chat ke pesan terbawah saat keyboard muncul
+  useEffect(() => {
+    const showSub = Keyboard.addListener("keyboardDidShow", () => {
+      if (activeTab === "chat") {
+        setTimeout(() => {
+          chatScrollRef.current?.scrollToEnd({ animated: true });
+        }, 80);
+      }
+    });
+    return () => showSub.remove();
+  }, [activeTab]);
 
   const appendChatMessage = useCallback(
     (role: ChatRole, text: string, source: "ketik" | "suara") => {
@@ -1152,7 +1165,7 @@ export default function TranslatorScreen() {
            MODE 2: SUARA <-> TEKS (CHAT BERGANTIAN 1 PERANGKAT)
            ====================================================== */
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior="padding"
           className="flex-1"
           keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
         >
@@ -1250,6 +1263,8 @@ export default function TranslatorScreen() {
             ref={chatScrollRef}
             className="flex-1 bg-slate-50 dark:bg-slate-950"
             contentContainerStyle={{ padding: 16, paddingBottom: 24, flexGrow: 1 }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
           >
             {chatMessages.length === 0 ? (
               <View className="flex-1 items-center justify-center px-6 py-12">

@@ -436,7 +436,7 @@ export default function QuickCardsScreen() {
         onRequestClose={() => setFormVisible(false)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior="padding"
           className="flex-1 justify-end bg-black/50"
         >
           <View className="max-h-[90%] rounded-t-3xl bg-white px-6 pb-8 pt-6">
@@ -452,7 +452,10 @@ export default function QuickCardsScreen() {
               </Pressable>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
               <Text className="mb-2 text-sm font-bold text-slate-800">
                 Kategori
               </Text>

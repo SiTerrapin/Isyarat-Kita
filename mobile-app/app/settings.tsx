@@ -18,6 +18,8 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   Switch,
@@ -171,10 +173,16 @@ export default function SettingsModalScreen() {
         </Pressable>
       </View>
 
-      <ScrollView
+      <KeyboardAvoidingView
+        behavior="padding"
         className="flex-1"
-        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 20 : 0}
       >
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
         {/* Tampilan Aplikasi (Light / Dark / System) */}
         <View className="mb-5 rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <View className="mb-3 flex-row items-center">
@@ -494,7 +502,8 @@ export default function SettingsModalScreen() {
             </>
           )}
         </View>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

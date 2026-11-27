@@ -71,7 +71,7 @@ export function AuthModal() {
       onRequestClose={closeAuthModal}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior="padding"
         className="flex-1 justify-end bg-black/50"
       >
         <View className="max-h-[90%] rounded-t-3xl bg-white px-6 pb-8 pt-6 dark:bg-slate-900">
@@ -137,7 +137,10 @@ export function AuthModal() {
             </Pressable>
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
             {mode === "register" && (
               <View className="mb-4">
                 <Text className="mb-1.5 text-sm font-semibold text-slate-800 dark:text-slate-200">
